@@ -691,21 +691,21 @@ namespace Weland {
 	    return (mapInfo.EntryPointFlags & flag) != 0;
 	}
 
-	static public void Main(string[] args) {
-	    if (args.Length == 1) {
-		Wadfile wadfile = new Wadfile();
-		wadfile.Load(args[0]);
+	//static public void Main(string[] args) {
+	//    if (args.Length == 1) {
+	//	Wadfile wadfile = new Wadfile();
+	//	wadfile.Load(args[0]);
 
-		Level level = new Level();
-		level.Load(wadfile.Directory[0]);
-		Console.WriteLine("\"{0}\"", level.mapInfo.Name);
-		Console.WriteLine("{0} Points", level.Endpoints.Count);
-		Console.WriteLine("{0} Lines", level.Lines.Count);
-		Console.WriteLine("{0} Polygons", level.Polygons.Count);
-	    } else {
-		Console.WriteLine("Test usage: wadfile.exe <wadfile>");
-	    }
-	}
+	//	Level level = new Level();
+	//	level.Load(wadfile.Directory[0]);
+	//	Console.WriteLine("\"{0}\"", level.mapInfo.Name);
+	//	Console.WriteLine("{0} Points", level.Endpoints.Count);
+	//	Console.WriteLine("{0} Lines", level.Lines.Count);
+	//	Console.WriteLine("{0} Polygons", level.Polygons.Count);
+	//    } else {
+	//	Console.WriteLine("Test usage: wadfile.exe <wadfile>");
+	//    }
+	//}
     }
 }
 

@@ -6,7 +6,7 @@ namespace Weland {
     public class LevelParametersDialog {
 	public LevelParametersDialog(Window parent, Level theLevel) {
 	    level = theLevel;
-	    Glade.XML gxml = new Glade.XML(null, "levelparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.levelparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}

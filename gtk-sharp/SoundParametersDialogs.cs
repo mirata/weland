@@ -6,7 +6,7 @@ namespace Weland {
     public class AmbientSoundParametersDialog {
 	public AmbientSoundParametersDialog(Window parent, AmbientSound theSound) {
 	    sound = theSound;
-	    Glade.XML gxml = new Glade.XML(null, "ambientsoundparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.ambientsoundparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}
@@ -36,7 +36,7 @@ namespace Weland {
     public class RandomSoundParametersDialog {
 	public RandomSoundParametersDialog(Window parent, RandomSound theSound) {
 	    sound = theSound;
-	    Glade.XML gxml = new Glade.XML(null, "randomsoundparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.randomsoundparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}

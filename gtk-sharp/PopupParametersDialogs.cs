@@ -7,7 +7,7 @@ namespace Weland {
 	public LineParametersDialog(Window parent, Level theLevel, Line theLine) {
 	    level = theLevel;
 	    line = theLine;
-	    Glade.XML gxml = new Glade.XML(null, "lineparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.lineparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}
@@ -48,7 +48,7 @@ namespace Weland {
 	public PointParametersDialog(Window parent, Level theLevel, short theIndex) {
 	    level = theLevel;
 	    index = theIndex;
-	    Glade.XML gxml = new Glade.XML(null, "pointparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.pointparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}
@@ -82,7 +82,7 @@ namespace Weland {
 
     public class GotoDialog {
 	public GotoDialog(Window parent) {
-	    Glade.XML gxml = new Glade.XML(null, "goto.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.goto.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}

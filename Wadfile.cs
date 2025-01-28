@@ -303,18 +303,18 @@ namespace Weland {
 	    }
 	}
 
-	static public void Main(string[] args) {
-	    if (args.Length == 2) {
-		Wadfile wadfile = new Wadfile();
-		wadfile.Load(args[0]);
+	//static public void Main(string[] args) {
+	//    if (args.Length == 2) {
+	//	Wadfile wadfile = new Wadfile();
+	//	wadfile.Load(args[0]);
 
-		Wadfile export = new Wadfile();
-		export.Directory[0] = wadfile.Directory[0];
-		export.Save(args[1]);
-		Console.WriteLine("DirectoryOffset: {0}", export.directoryOffset);
-	    } else {
-		Console.WriteLine("Test usage: wadfile.exe <wadfile> <export>");
-	    }
-	}
+	//	Wadfile export = new Wadfile();
+	//	export.Directory[0] = wadfile.Directory[0];
+	//	export.Save(args[1]);
+	//	Console.WriteLine("DirectoryOffset: {0}", export.directoryOffset);
+	//    } else {
+	//	Console.WriteLine("Test usage: wadfile.exe <wadfile> <export>");
+	//    }
+	//}
     }
 }

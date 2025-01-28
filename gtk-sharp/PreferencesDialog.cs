@@ -8,7 +8,7 @@ using System.IO;
 namespace Weland {
     public class PreferencesDialog {
 	public PreferencesDialog(Window parent, MapDrawingArea drawingArea, Editor theEditor) {
-	    Glade.XML gxml = new Glade.XML(null, "preferences.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.preferences.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
             if (PlatformDetection.IsMac) {

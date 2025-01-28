@@ -239,7 +239,7 @@ namespace Weland {
 
     public class PointDialog {
 	public PointDialog(Gtk.Window w) {
-	    Glade.XML gxml = new Glade.XML(null, "pointparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glade.pointparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = w;
 	}

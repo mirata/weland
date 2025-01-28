@@ -3,6 +3,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Weland {
     // from Mono.TextEditor.Platform
@@ -95,8 +96,9 @@ namespace Weland {
             {
                 CheckWindowsGtk();
             }
-            
-	    Application.Init();
+
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            Application.Init();
 	    
 	    ShapesFile shapes = new ShapesFile();
 	    shapes.Load(Settings.GetSetting("ShapesFile/Path", ""));

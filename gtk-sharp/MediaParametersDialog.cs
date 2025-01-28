@@ -7,7 +7,7 @@ namespace Weland {
 	public MediaParametersDialog(Window parent, Level theLevel, short index) {
 	    level = theLevel;
 	    media_index = index;
-	    Glade.XML gxml = new Glade.XML(null, "mediaparameters.glade", "dialog1", null);
+	    Glade.XML gxml = new Glade.XML(null, "weland.glademediaparameters.glade", "dialog1", null);
 	    gxml.Autoconnect(this);
 	    dialog1.TransientFor = parent;
 	}
