@@ -40,6 +40,8 @@ const lineMatch = (line1, line2) => {{
   return valid;
 }};
 
+allSectorLines = [];
+
 const drawSector = (sector, debug = false) => {{
   UDB.Map.drawLines([sector.lines[0].start, ...sector.lines.map((l) => l.end)]);
 
@@ -54,41 +56,30 @@ const drawSector = (sector, debug = false) => {{
     for (let l of s.getSidedefs()) {{
       const sectorLine = sector.lines.find((x) => lineMatch([x.start, x.end], [l.line.line.v1, l.line.line.v2]));
       if (!sectorLine) {{
-        l.middleTexture = ""-"";
         continue;
       }}
 
-      l.upperTexture = sectorLine.upperTexture?.name ?? ""-"";
-      l.middleTexture = sectorLine.middleTexture?.name ?? ""-"";
-      l.lowerTexture = sectorLine.lowerTexture?.name ?? ""-"";
+      allSectorLines.push({{sideIndex: l.index, sectorLine: sectorLine }});
     }}
   }}
 }};
 
 ");
+
+                var index = 0;
                 foreach (Polygon p in level.Polygons)
                 {
-                    w.WriteLine("UDB.Map.drawLines([");
-                    for (int i = 0; i < p.VertexCount; ++i)
-                    {
-                        var point = level.Endpoints[p.EndpointIndexes[i]];
-                        w.WriteLine($"\tnew UDB.Vector2D({ConvertPoint(point.X)}, {-ConvertPoint(point.Y)}),");
-                    }
-                    var point0 = level.Endpoints[p.EndpointIndexes[0]];
-                    w.WriteLine($"\tnew UDB.Vector2D({ConvertPoint(point0.X)}, {-ConvertPoint(point0.Y)}),");
-                    w.WriteLine("]);\n");
                     var lines = new List<UDBLine>();
 
                     for (var i = 0; i < p.VertexCount; ++i)
                     {
+                        var pointStart = level.Endpoints[p.EndpointIndexes[i]];
+                        var pointEnd = level.Endpoints[p.EndpointIndexes[i == p.VertexCount - 1 ? 0 : i + 1]];
                         var line = level.Lines[p.LineIndexes[i]];
-                        var side = p.SideIndexes[i] > -1 ? level.Sides[p.SideIndexes[i]] : null;
-                        Polygon? adjacentPolygon = null;
-                        try
-                        {
-                            adjacentPolygon = p.AdjacentPolygonIndexes[i] > -1 ? level.Polygons[p.AdjacentPolygonIndexes[i]] : null;
-                        }
-                        catch (Exception) { }
+                        var side = p.SideIndexes[i] > -1 && p.SideIndexes[i] < level.Sides.Count ? level.Sides[p.SideIndexes[i]] : null;
+                        var pIndex = p.AdjacentPolygonIndexes[i];
+
+                        var adjacentPolygon = pIndex > -1 && pIndex < level.Polygons.Count ? level.Polygons[pIndex] : null;
 
                         TextureDefinition? upper = null;
                         TextureDefinition? middle = null;
@@ -125,13 +116,13 @@ const drawSector = (sector, debug = false) => {{
                         {
                             Start = new UDBVector
                             {
-                                X = ConvertPoint(start.X),
-                                Y = -ConvertPoint(start.Y)
+                                X = ConvertPoint(pointStart.X),
+                                Y = -ConvertPoint(pointStart.Y)
                             },
                             End = new UDBVector
                             {
-                                X = ConvertPoint(end.X),
-                                Y = -ConvertPoint(end.Y)
+                                X = ConvertPoint(pointEnd.X),
+                                Y = -ConvertPoint(pointEnd.Y)
                             },
                             Upper = upper,
                             Middle = middle,
@@ -140,6 +131,7 @@ const drawSector = (sector, debug = false) => {{
                     }
 
                     w.WriteLine($@"drawSector({{
+  index: {index},
   floorHeight: {ConvertPoint(p.FloorHeight)},
   ceilingHeight: {ConvertPoint(p.CeilingHeight)},
   floorTexture: '{FormatTexture(p.FloorTexture)}',
@@ -148,7 +140,7 @@ const drawSector = (sector, debug = false) => {{
   lines: [
 {string.Join(string.Empty, lines.Select(e => $@"    {{
       start: new UDB.Vector2D({e.Start.X}, {e.Start.Y}),
-      end: new UDB.Vector2D(${e.End.X}, {e.End.Y}),
+      end: new UDB.Vector2D({e.End.X}, {e.End.Y}),
       upperTexture: {ConvertTexture(e.Upper)},
       middleTexture: {ConvertTexture(e.Middle)},
       lowerTexture: {ConvertTexture(e.Lower)},
@@ -158,7 +150,23 @@ const drawSector = (sector, debug = false) => {{
 }});
 
 ");
+                    index++;
                 }
+
+                w.WriteLine($@"
+
+for (const sl of allSectorLines) {{
+  const line = UDB.Map.getSidedefs()[sl.sideIndex];
+  if (sl.sectorLine.upperTexture) {{
+    line.upperTexture = sl.sectorLine.upperTexture.name;
+  }}
+  if (sl.sectorLine.middleTexture) {{
+    line.middleTexture = sl.sectorLine.middleTexture.name;
+  }}
+  if (sl.sectorLine.lowerTexture) {{
+    line.lowerTexture = sl.sectorLine.lowerTexture.name;
+  }}
+}}");
             }
         }
 
@@ -194,7 +202,7 @@ const drawSector = (sector, debug = false) => {{
 
         private double ConvertPoint(short val)
         {
-            return World.ToDouble(val) * Scale;
+            return Math.Round(World.ToDouble(val) * Scale, 3);
         }
     }
 }
