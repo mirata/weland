@@ -116,13 +116,13 @@ const drawSector = (sector, debug = false) => {{
                         {
                             Start = new UDBVector
                             {
-                                X = ConvertPoint(pointStart.X),
-                                Y = -ConvertPoint(pointStart.Y)
+                                X = ConvertUnit(pointStart.X),
+                                Y = -ConvertUnit(pointStart.Y)
                             },
                             End = new UDBVector
                             {
-                                X = ConvertPoint(pointEnd.X),
-                                Y = -ConvertPoint(pointEnd.Y)
+                                X = ConvertUnit(pointEnd.X),
+                                Y = -ConvertUnit(pointEnd.Y)
                             },
                             Upper = upper,
                             Middle = middle,
@@ -132,8 +132,8 @@ const drawSector = (sector, debug = false) => {{
 
                     w.WriteLine($@"drawSector({{
   index: {index},
-  floorHeight: {ConvertPoint(p.FloorHeight)},
-  ceilingHeight: {ConvertPoint(p.CeilingHeight)},
+  floorHeight: {ConvertUnit(p.FloorHeight)},
+  ceilingHeight: {ConvertUnit(p.CeilingHeight)},
   floorTexture: '{FormatTexture(p.FloorTexture)}',
   ceilingTexture: '{FormatTexture(p.CeilingTexture)}',
   brightness: {FormatBrightness(p.FloorLight)},
@@ -154,17 +154,23 @@ const drawSector = (sector, debug = false) => {{
                 }
 
                 w.WriteLine($@"
-
+textureoffsetx_top: 44.812
 for (const sl of allSectorLines) {{
   const line = UDB.Map.getSidedefs()[sl.sideIndex];
   if (sl.sectorLine.upperTexture) {{
     line.upperTexture = sl.sectorLine.upperTexture.name;
+    line.offsetX = sl.sectorLine.upperTexture.offset[0];
+    line.offsetY = sl.sectorLine.upperTexture.offset[1];
   }}
   if (sl.sectorLine.middleTexture) {{
     line.middleTexture = sl.sectorLine.middleTexture.name;
+    line.offsetX = sl.sectorLine.middleTexture.offset[0];
+    line.offsetY = sl.sectorLine.middleTexture.offset[1];
   }}
   if (sl.sectorLine.lowerTexture) {{
     line.lowerTexture = sl.sectorLine.lowerTexture.name;
+    line.offsetX = sl.sectorLine.lowerTexture.offset[0];
+    line.offsetY = sl.sectorLine.lowerTexture.offset[1];
   }}
 }}");
             }
@@ -176,7 +182,7 @@ for (const sl of allSectorLines) {{
             {
                 return "null";
             }
-            return $@"{{ name: '{FormatTexture(texture.Value.Texture)}', offset: [0, 0] }}";
+            return $@"{{ name: '{FormatTexture(texture.Value.Texture)}', offset: [{ConvertUnit(texture.Value.X)}, {ConvertUnit(texture.Value.Y)}] }}";
         }
 
         private string FormatTexture(ShapeDescriptor shapeDescriptor)
@@ -200,7 +206,7 @@ for (const sl of allSectorLines) {{
             return (short)((intensity * 155) + 100);
         }
 
-        private double ConvertPoint(short val)
+        private double ConvertUnit(short val)
         {
             return Math.Round(World.ToDouble(val) * Scale, 3);
         }
