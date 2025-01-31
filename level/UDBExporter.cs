@@ -81,9 +81,9 @@ const drawSector = (sector, debug = false) => {{
 
                         var adjacentPolygon = pIndex > -1 && pIndex < level.Polygons.Count ? level.Polygons[pIndex] : null;
 
-                        TextureDefinition? upper = null;
-                        TextureDefinition? middle = null;
-                        TextureDefinition? lower = null;
+                        UDBTexture? upper = null;
+                        UDBTexture? middle = null;
+                        UDBTexture? lower = null;
 
                         if (side != null)
                         {
@@ -91,21 +91,23 @@ const drawSector = (sector, debug = false) => {{
                             {
                                 if (adjacentPolygon.CeilingHeight < p.CeilingHeight && adjacentPolygon.FloorHeight > p.FloorHeight)
                                 {
-                                    upper = side.Primary;
-                                    lower = side.Secondary;
+                                    var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
+                                    upper = ConvertTexture(side.Primary, yOffset);
+                                    lower = ConvertTexture(side.Secondary);
                                 }
                                 else if (adjacentPolygon.CeilingHeight < p.CeilingHeight)
                                 {
-                                    upper = side.Primary;
+                                    var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
+                                    upper = ConvertTexture(side.Primary, yOffset);
                                 }
                                 else if (adjacentPolygon.FloorHeight > p.FloorHeight)
                                 {
-                                    lower = side.Primary;
+                                    lower = ConvertTexture(side.Primary);
                                 }
                             }
                             else
                             {
-                                middle = side.Primary;
+                                middle = ConvertTexture(side.Primary);
                             }
                         }
 
@@ -134,16 +136,16 @@ const drawSector = (sector, debug = false) => {{
   index: {index},
   floorHeight: {ConvertUnit(p.FloorHeight)},
   ceilingHeight: {ConvertUnit(p.CeilingHeight)},
-  floorTexture: '{FormatTexture(p.FloorTexture)}',
-  ceilingTexture: '{FormatTexture(p.CeilingTexture)}',
+  floorTexture: '{FormatTextureName(p.FloorTexture)}',
+  ceilingTexture: '{FormatTextureName(p.CeilingTexture)}',
   brightness: {FormatBrightness(p.FloorLight)},
   lines: [
 {string.Join(string.Empty, lines.Select(e => $@"    {{
       start: new UDB.Vector2D({e.Start.X}, {e.Start.Y}),
       end: new UDB.Vector2D({e.End.X}, {e.End.Y}),
-      upperTexture: {ConvertTexture(e.Upper)},
-      middleTexture: {ConvertTexture(e.Middle)},
-      lowerTexture: {ConvertTexture(e.Lower)},
+      upperTexture: {FormatTexture(e.Upper)},
+      middleTexture: {FormatTexture(e.Middle)},
+      lowerTexture: {FormatTexture(e.Lower)},
     }},
 "))}
   ],
@@ -154,38 +156,47 @@ const drawSector = (sector, debug = false) => {{
                 }
 
                 w.WriteLine($@"
-textureoffsetx_top: 44.812
 for (const sl of allSectorLines) {{
   const line = UDB.Map.getSidedefs()[sl.sideIndex];
   if (sl.sectorLine.upperTexture) {{
     line.upperTexture = sl.sectorLine.upperTexture.name;
-    line.offsetX = sl.sectorLine.upperTexture.offset[0];
-    line.offsetY = sl.sectorLine.upperTexture.offset[1];
+    line.fields.offsetx_top = sl.sectorLine.upperTexture.offset[0];
+    line.fields.offsety_top = sl.sectorLine.upperTexture.offset[1];
   }}
   if (sl.sectorLine.middleTexture) {{
     line.middleTexture = sl.sectorLine.middleTexture.name;
-    line.offsetX = sl.sectorLine.middleTexture.offset[0];
-    line.offsetY = sl.sectorLine.middleTexture.offset[1];
+    line.fields.offsetx_mid = sl.sectorLine.middleTexture.offset[0];
+    line.fields.offsety_mid = sl.sectorLine.middleTexture.offset[1];
   }}
   if (sl.sectorLine.lowerTexture) {{
     line.lowerTexture = sl.sectorLine.lowerTexture.name;
-    line.offsetX = sl.sectorLine.lowerTexture.offset[0];
-    line.offsetY = sl.sectorLine.lowerTexture.offset[1];
+    line.fields.offsetx_bottom = sl.sectorLine.lowerTexture.offset[0];
+    line.fields.offsety_bottom = sl.sectorLine.lowerTexture.offset[1];
   }}
-}}");
+}}
+");
             }
         }
 
-        public string ConvertTexture(TextureDefinition? texture)
+        public UDBTexture? ConvertTexture(TextureDefinition? texture, double? yOffset = null)
+        {
+            if (texture == null)
+            {
+                return null;
+            }
+            return new UDBTexture { Name = FormatTextureName(texture.Value.Texture), X = ConvertUnit(texture.Value.X), Y = ConvertUnit(texture.Value.Y) + (yOffset ?? 0) };
+        }
+
+        public string FormatTexture(UDBTexture? texture)
         {
             if (texture == null)
             {
                 return "null";
             }
-            return $@"{{ name: '{FormatTexture(texture.Value.Texture)}', offset: [{ConvertUnit(texture.Value.X)}, {ConvertUnit(texture.Value.Y)}] }}";
+            return $@"{{ name: '{texture.Name}', offset: [{texture.X}, {texture.Y}] }}";
         }
 
-        private string FormatTexture(ShapeDescriptor shapeDescriptor)
+        private string FormatTextureName(ShapeDescriptor shapeDescriptor)
         {
             var env = level.Environment + 1;
             var texId = shapeDescriptor.Bitmap;
@@ -213,17 +224,24 @@ for (const sl of allSectorLines) {{
     }
 }
 
-class UDBLine
+public class UDBLine
 {
     public required UDBVector Start { get; set; }
     public required UDBVector End { get; set; }
-    public TextureDefinition? Upper { get; set; }
-    public TextureDefinition? Middle { get; set; }
-    public TextureDefinition? Lower { get; set; }
+    public UDBTexture? Upper { get; set; }
+    public UDBTexture? Middle { get; set; }
+    public UDBTexture? Lower { get; set; }
 }
 
-class UDBVector
+public class UDBVector
 {
+    public double X { get; set; }
+    public double Y { get; set; }
+}
+
+public class UDBTexture
+{
+    public required string Name { get; set; }
     public double X { get; set; }
     public double Y { get; set; }
 }
