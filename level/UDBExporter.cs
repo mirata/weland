@@ -47,11 +47,20 @@ const drawSector = (sector, debug = false) => {{
 
   let sectors = UDB.Map.getMarkedSectors();
   for (let s of sectors) {{
+    s.fields.rotationfloor = 90;
+    s.fields.rotationceiling = 90;
+    // lightceilingabsolute = true;
+    // lightceiling = 150;
+    // lightfloor = 32;
     s.floorHeight = sector.floorHeight;
     s.ceilingHeight = sector.ceilingHeight;
-    s.floorTexture = sector.floorTexture;
-    s.ceilingTexture = sector.ceilingTexture;
-    s.brightness = sector.brightness;
+    s.floorTexture = sector.floorTexture.sky ? 'F_SKY1' : sector.floorTexture.name;
+    s.ceilingTexture = sector.ceilingTexture.sky ? 'F_SKY1' : sector.ceilingTexture.name;
+    s.brightness = sector.floorBrightness;
+    if (sector.ceilingBrightness != sector.floorBrightness) {{
+      s.fields.lightceilingabsolute = true;
+      s.fields.lightceiling = sector.ceilingBrightness;
+    }}
 
     for (let l of s.getSidedefs()) {{
       const sectorLine = sector.lines.find((x) => lineMatch([x.start, x.end], [l.line.line.v1, l.line.line.v2]));
@@ -92,22 +101,22 @@ const drawSector = (sector, debug = false) => {{
                                 if (adjacentPolygon.CeilingHeight < p.CeilingHeight && adjacentPolygon.FloorHeight > p.FloorHeight)
                                 {
                                     var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
-                                    upper = ConvertTexture(side.Primary, yOffset);
-                                    lower = ConvertTexture(side.Secondary);
+                                    upper = ConvertTexture(side.Primary, side.PrimaryTransferMode, yOffset);
+                                    lower = ConvertTexture(side.Secondary, side.SecondaryTransferMode);
                                 }
                                 else if (adjacentPolygon.CeilingHeight < p.CeilingHeight)
                                 {
                                     var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
-                                    upper = ConvertTexture(side.Primary, yOffset);
+                                    upper = ConvertTexture(side.Primary, side.PrimaryTransferMode, yOffset);
                                 }
                                 else if (adjacentPolygon.FloorHeight > p.FloorHeight)
                                 {
-                                    lower = ConvertTexture(side.Primary);
+                                    lower = ConvertTexture(side.Primary, side.PrimaryTransferMode);
                                 }
                             }
                             else
                             {
-                                middle = ConvertTexture(side.Primary);
+                                middle = ConvertTexture(side.Primary, side.PrimaryTransferMode);
                             }
                         }
 
@@ -136,9 +145,10 @@ const drawSector = (sector, debug = false) => {{
   index: {index},
   floorHeight: {ConvertUnit(p.FloorHeight)},
   ceilingHeight: {ConvertUnit(p.CeilingHeight)},
-  floorTexture: '{FormatTextureName(p.FloorTexture)}',
-  ceilingTexture: '{FormatTextureName(p.CeilingTexture)}',
-  brightness: {FormatBrightness(p.FloorLight)},
+  floorTexture: {{ name: '{FormatTextureName(p.FloorTexture)}', offset: [{ConvertUnit(p.FloorOrigin.X)}, {ConvertUnit(p.FloorOrigin.Y)}], sky: {GetSky(p.FloorTransferMode)} }},
+  ceilingTexture: {{ name: '{FormatTextureName(p.CeilingTexture)}', offset: [{ConvertUnit(p.CeilingOrigin.X)}, {ConvertUnit(p.CeilingOrigin.Y)}], sky: {GetSky(p.CeilingTransferMode)} }},
+  floorBrightness: {FormatBrightness(p.FloorLight)},
+  ceilingBrightness: {FormatBrightness(p.CeilingLight)},
   lines: [
 {string.Join(string.Empty, lines.Select(e => $@"    {{
       start: new UDB.Vector2D({e.Start.X}, {e.Start.Y}),
@@ -159,32 +169,50 @@ const drawSector = (sector, debug = false) => {{
 for (const sl of allSectorLines) {{
   const line = UDB.Map.getSidedefs()[sl.sideIndex];
   if (sl.sectorLine.upperTexture) {{
-    line.upperTexture = sl.sectorLine.upperTexture.name;
-    line.fields.offsetx_top = sl.sectorLine.upperTexture.offset[0];
-    line.fields.offsety_top = sl.sectorLine.upperTexture.offset[1];
+    if(sl.sectorLine.upperTexture.sky){{
+      line.upperTexture = '-';
+    }} else {{
+      line.upperTexture = sl.sectorLine.upperTexture.name;
+      line.fields.offsetx_top = sl.sectorLine.upperTexture.offset[0];
+      line.fields.offsety_top = sl.sectorLine.upperTexture.offset[1];
+    }}
   }}
   if (sl.sectorLine.middleTexture) {{
-    line.middleTexture = sl.sectorLine.middleTexture.name;
-    line.fields.offsetx_mid = sl.sectorLine.middleTexture.offset[0];
-    line.fields.offsety_mid = sl.sectorLine.middleTexture.offset[1];
+    if(sl.sectorLine.middleTexture.sky){{
+      line.middleTexture = '-';
+    }} else {{
+      line.middleTexture = sl.sectorLine.middleTexture.name;
+      line.fields.offsetx_mid = sl.sectorLine.middleTexture.offset[0];
+      line.fields.offsety_mid = sl.sectorLine.middleTexture.offset[1];
+    }}
   }}
   if (sl.sectorLine.lowerTexture) {{
-    line.lowerTexture = sl.sectorLine.lowerTexture.name;
-    line.fields.offsetx_bottom = sl.sectorLine.lowerTexture.offset[0];
-    line.fields.offsety_bottom = sl.sectorLine.lowerTexture.offset[1];
+    if(sl.sectorLine.lowerTexture.sky){{
+      line.lowerTexture = '-';
+    }} else {{
+      line.lowerTexture = sl.sectorLine.lowerTexture.name;
+      line.fields.offsetx_bottom = sl.sectorLine.lowerTexture.offset[0];
+      line.fields.offsety_bottom = sl.sectorLine.lowerTexture.offset[1];
+    }}
   }}
 }}
+
 ");
             }
         }
 
-        public UDBTexture? ConvertTexture(TextureDefinition? texture, double? yOffset = null)
+        public UDBTexture? ConvertTexture(TextureDefinition? texture, short transferMode, double? yOffset = null)
         {
             if (texture == null)
             {
                 return null;
             }
-            return new UDBTexture { Name = FormatTextureName(texture.Value.Texture), X = ConvertUnit(texture.Value.X), Y = ConvertUnit(texture.Value.Y) + (yOffset ?? 0) };
+            return new UDBTexture { Name = FormatTextureName(texture.Value.Texture), X = ConvertUnit(texture.Value.X), Y = ConvertUnit(texture.Value.Y) + (yOffset ?? 0), Sky = GetSky(transferMode) };
+        }
+
+        private string GetSky(short transferMode)
+        {
+            return (transferMode == 9).ToString().ToLower();
         }
 
         public string FormatTexture(UDBTexture? texture)
@@ -193,7 +221,7 @@ for (const sl of allSectorLines) {{
             {
                 return "null";
             }
-            return $@"{{ name: '{texture.Name}', offset: [{texture.X}, {texture.Y}] }}";
+            return $@"{{ name: '{texture.Name}', offset: [{texture.X}, {texture.Y}], sky: {texture.Sky} }}";
         }
 
         private string FormatTextureName(ShapeDescriptor shapeDescriptor)
@@ -244,4 +272,5 @@ public class UDBTexture
     public required string Name { get; set; }
     public double X { get; set; }
     public double Y { get; set; }
+    public string Sky { get; set; }
 }
