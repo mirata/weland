@@ -3,12 +3,104 @@ using System.IO;
 using System.Collections.Generic;
 using Pango;
 using static Weland.Side;
+using System.Xml.Linq;
+using Gtk;
+using Weland;
 
 namespace Weland
 {
     public class UDBExporter
     {
         const double Scale = 64.0;
+
+        string[] itemNames = {
+        "Knife",
+        "Magnum Pistol",
+        "Magnum Magazine",
+        "Plasma Pistol",
+        "Plasma Energy Cell",
+        "Assault Rifle",
+        "AR Magazine",
+        "AR Grenade Magazine",
+        "Missile Launcher",
+        "Missile 2-Pack",
+        "Invisibility Powerup",
+        "Invincibility Powerup",
+        "Infravision Powerup",
+        "Alien Weapon",
+        "Alien Weapon Ammo",
+        "Flamethrower",
+        "Flamethrower Canister",
+        "Extravision Powerup",
+        "Oxygen Powerup",
+        "Energy Powerup x1",
+        "Energy Powerup x2",
+        "Energy Powerup x3",
+        "Shotgun",
+        "Shotgun Cartridges",
+        "S'pht Door Key",
+        "Uplink Chip",
+        "Light Blue Ball",
+        "The Ball",
+        "Violet Ball",
+        "Yellow Ball",
+        "Brown Ball",
+        "Orange Ball",
+        "Blue Ball",
+        "Green Ball",
+        "Submachine Gun",
+        "Submachine Gun Clip"
+        };
+
+        string[] monsterNames = {
+            "Marine",
+            "Tick Energy",
+            "Tick Oxygen",
+            "Tick Kamakazi",
+            "Compiler Minor",
+            "Compiler Major",
+            "Compiler Minor Invisible",
+            "Compiler Major Invisible",
+            "Fighter Minor",
+            "Fighter Major",
+            "Fighter Minor Projectile",
+            "Fighter Major Projectile",
+            "Civilian Crew",
+            "Civilian Science",
+            "Civilian Security",
+            "Civilian Assimilated",
+            "Hummer Minor",
+            "Hummer Major",
+            "Hummer Big Minor",
+            "Hummer Big Major",
+            "Hummer Possessed",
+            "Cyborg Minor",
+            "Cyborg Major",
+            "Cyborg Flame Minor",
+            "Cyborg Flame Major",
+            "Enforcer Minor",
+            "Enforcer Major",
+            "Hunter Minor",
+            "Hunter Major",
+            "Trooper Minor",
+            "Trooper Major",
+            "Mother of all Cyborgs",
+            "Mother of all Hunters",
+            "Sewage Yeti",
+            "Water Yeti",
+            "Lava Yeti",
+            "Defender Minor",
+            "Defender Major",
+            "Juggernaut Minor",
+            "Juggernaut Major",
+            "Tiny Figher",
+            "Tiny Bob",
+            "Tiny Yeti",
+            "Civilian Fusion Crew",
+            "Civilian Fusion Science",
+            "Civilian Fusion Security",
+            "Civilian Fusion Assimilated"
+        };
 
         Level level;
 
@@ -25,6 +117,8 @@ namespace Weland
 `#version 4`;
 
 `#name {level.Name}`;
+
+let count = 0;
 
 const lineMatch = (line1, line2) => {{
   const isCollinear = (p1, p2, p3) => {{
@@ -57,9 +151,12 @@ const drawSector = (sector, debug = false) => {{
     s.floorTexture = sector.floorTexture.sky ? 'F_SKY1' : sector.floorTexture.name;
     s.ceilingTexture = sector.ceilingTexture.sky ? 'F_SKY1' : sector.ceilingTexture.name;
     s.brightness = sector.floorBrightness;
-    if (sector.ceilingBrightness != sector.floorBrightness) {{
+    if (sector.ceilingBrightness !== sector.floorBrightness) {{
       s.fields.lightceilingabsolute = true;
       s.fields.lightceiling = sector.ceilingBrightness;
+    }} else {{
+      s.fields.lightceilingabsolute = false;
+      s.fields.lightceiling = 0;
     }}
 
     for (let l of s.getSidedefs()) {{
@@ -71,6 +168,10 @@ const drawSector = (sector, debug = false) => {{
       allSectorLines.push({{sideIndex: l.index, sectorLine: sectorLine }});
     }}
   }}
+  count++;
+  if (count % 50 === 0) {{
+    UDB.showMessageYesNo(`${{count}}`);
+  }}
 }};
 
 ");
@@ -78,6 +179,35 @@ const drawSector = (sector, debug = false) => {{
                 var index = 0;
                 foreach (Polygon p in level.Polygons)
                 {
+                    var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
+                    var floorHeight = p.FloorHeight;
+                    var ceilingHeight = p.CeilingHeight;
+                    if (platform != null)
+                    {
+                        if (platform.ComesFromCeiling)
+                        {
+                            if (platform.InitiallyExtended)
+                            {
+                                ceilingHeight = platform.MinimumHeight;
+                            }
+                            else if (platform.MinimumHeight < p.CeilingHeight)
+                            {
+                                ceilingHeight = platform.MinimumHeight;
+                            }
+                        }
+                        if (platform.ComesFromFloor)
+                        {
+                            if (platform.InitiallyExtended)
+                            {
+                                floorHeight = platform.MaximumHeight;
+                            }
+                            else if (platform.MaximumHeight > p.FloorHeight)
+                            {
+                                floorHeight = platform.MaximumHeight;
+                            }
+                        }
+                    }
+
                     var lines = new List<UDBLine>();
 
                     for (var i = 0; i < p.VertexCount; ++i)
@@ -89,6 +219,7 @@ const drawSector = (sector, debug = false) => {{
                         var pIndex = p.AdjacentPolygonIndexes[i];
 
                         var adjacentPolygon = pIndex > -1 && pIndex < level.Polygons.Count ? level.Polygons[pIndex] : null;
+                        var adjacentPlatform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == pIndex);
 
                         UDBTexture? upper = null;
                         UDBTexture? middle = null;
@@ -104,12 +235,12 @@ const drawSector = (sector, debug = false) => {{
                                     upper = ConvertTexture(side.Primary, side.PrimaryTransferMode, yOffset);
                                     lower = ConvertTexture(side.Secondary, side.SecondaryTransferMode);
                                 }
-                                else if (adjacentPolygon.CeilingHeight < p.CeilingHeight)
+                                else if (adjacentPolygon.CeilingHeight < p.CeilingHeight || (adjacentPlatform?.ComesFromCeiling ?? false))
                                 {
                                     var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
                                     upper = ConvertTexture(side.Primary, side.PrimaryTransferMode, yOffset);
                                 }
-                                else if (adjacentPolygon.FloorHeight > p.FloorHeight)
+                                else if (adjacentPolygon.FloorHeight > p.FloorHeight || (adjacentPlatform?.ComesFromFloor ?? false))
                                 {
                                     lower = ConvertTexture(side.Primary, side.PrimaryTransferMode);
                                 }
@@ -118,6 +249,10 @@ const drawSector = (sector, debug = false) => {{
                             {
                                 middle = ConvertTexture(side.Primary, side.PrimaryTransferMode);
                             }
+                        }
+                        else
+                        {
+                            middle = new UDBTexture { Name = "F_SKY1", X = 0, Y = 0, Sky = true };
                         }
 
                         var start = level.Endpoints[line.EndpointIndexes[0]];
@@ -137,18 +272,20 @@ const drawSector = (sector, debug = false) => {{
                             },
                             Upper = upper,
                             Middle = middle,
-                            Lower = lower
+                            Lower = lower,
+                            AdjacentPlatform = FormatAdjacentPlatform(adjacentPlatform),
                         });
                     }
 
                     w.WriteLine($@"drawSector({{
   index: {index},
-  floorHeight: {ConvertUnit(p.FloorHeight)},
-  ceilingHeight: {ConvertUnit(p.CeilingHeight)},
-  floorTexture: {{ name: '{FormatTextureName(p.FloorTexture)}', offset: [{ConvertUnit(p.FloorOrigin.X)}, {ConvertUnit(p.FloorOrigin.Y)}], sky: {GetSky(p.FloorTransferMode)} }},
-  ceilingTexture: {{ name: '{FormatTextureName(p.CeilingTexture)}', offset: [{ConvertUnit(p.CeilingOrigin.X)}, {ConvertUnit(p.CeilingOrigin.Y)}], sky: {GetSky(p.CeilingTransferMode)} }},
+  floorHeight: {ConvertUnit(floorHeight)},
+  ceilingHeight: {ConvertUnit(ceilingHeight)},
+  floorTexture: {{ name: '{FormatTextureName(p.FloorTexture)}', offset: [{ConvertUnit(p.FloorOrigin.X)}, {ConvertUnit(p.FloorOrigin.Y)}], sky: {FormatBool(GetSky(p.FloorTransferMode))} }},
+  ceilingTexture: {{ name: '{FormatTextureName(p.CeilingTexture)}', offset: [{ConvertUnit(p.CeilingOrigin.X)}, {ConvertUnit(p.CeilingOrigin.Y)}], sky: {FormatBool(GetSky(p.CeilingTransferMode))} }},
   floorBrightness: {FormatBrightness(p.FloorLight)},
   ceilingBrightness: {FormatBrightness(p.CeilingLight)},
+  polygon: {FormatPlatform(platform)},
   lines: [
 {string.Join(string.Empty, lines.Select(e => $@"    {{
       start: new UDB.Vector2D({e.Start.X}, {e.Start.Y}),
@@ -210,9 +347,32 @@ for (const sl of allSectorLines) {{
             return new UDBTexture { Name = FormatTextureName(texture.Value.Texture), X = ConvertUnit(texture.Value.X), Y = ConvertUnit(texture.Value.Y) + (yOffset ?? 0), Sky = GetSky(transferMode) };
         }
 
-        private string GetSky(short transferMode)
+        private bool GetSky(short transferMode)
         {
-            return (transferMode == 9).ToString().ToLower();
+            return (transferMode == 9);
+        }
+
+        public string FormatPlatform(Platform? platform)
+        {
+            if (platform == null)
+            {
+                return "null";
+            }
+            return $@"{{ maxHeight: {ConvertUnit(platform.MaximumHeight)}, minHeight: '{ConvertUnit(platform.MinimumHeight)}', speed: {platform.Speed}, delay: {platform.Delay}, isDoor: {FormatBool(platform.IsDoor)}, ceiling: {FormatBool(platform.ComesFromCeiling)}, floor: {FormatBool(platform.ComesFromFloor)}, isExtended: {FormatBool(platform.InitiallyExtended)}, isLocked: {FormatBool(platform.IsLocked)}, isDoor: {FormatBool(platform.IsDoor)} isPlayerControl: {FormatBool(platform.IsPlayerControllable)}, isMonsterControl: {FormatBool(platform.IsMonsterControllable)} }}";
+        }
+
+        public string FormatBool(bool value)
+        {
+            return value.ToString().ToLower();
+        }
+
+        public UDBAdjacentPlatform? FormatAdjacentPlatform(Platform? platform)
+        {
+            if (platform == null)
+            {
+                return null;
+            }
+            return new UDBAdjacentPlatform { Ceiling = platform.ComesFromCeiling, Floor = platform.ComesFromFloor };
         }
 
         public string FormatTexture(UDBTexture? texture)
@@ -221,12 +381,17 @@ for (const sl of allSectorLines) {{
             {
                 return "null";
             }
-            return $@"{{ name: '{texture.Name}', offset: [{texture.X}, {texture.Y}], sky: {texture.Sky} }}";
+            return $@"{{ name: '{texture.Name}', offset: [{texture.X}, {texture.Y}], sky: {FormatBool(texture.Sky)} }}";
         }
 
         private string FormatTextureName(ShapeDescriptor shapeDescriptor)
         {
             var env = level.Environment + 1;
+            if (env == 5)
+            {
+                env = 4;
+            }
+
             var texId = shapeDescriptor.Bitmap;
             if (env == 3 && texId > 27)
             {
@@ -236,6 +401,15 @@ for (const sl of allSectorLines) {{
             {
                 texId--;
             }
+            else if (env == 1 && texId > 30)
+            {
+                texId--;
+            }
+            else if (env == 4 && texId > 10)
+            {
+                texId--;
+            }
+
             return $"{(env)}SET{texId.ToString("00")}";
         }
 
@@ -259,6 +433,13 @@ public class UDBLine
     public UDBTexture? Upper { get; set; }
     public UDBTexture? Middle { get; set; }
     public UDBTexture? Lower { get; set; }
+    public UDBAdjacentPlatform? AdjacentPlatform { get; set; }
+}
+
+public class UDBAdjacentPlatform
+{
+    public bool Ceiling { get; set; }
+    public bool Floor { get; set; }
 }
 
 public class UDBVector
@@ -272,5 +453,5 @@ public class UDBTexture
     public required string Name { get; set; }
     public double X { get; set; }
     public double Y { get; set; }
-    public string Sky { get; set; }
+    public bool Sky { get; set; }
 }
