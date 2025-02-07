@@ -911,6 +911,13 @@ namespace Weland
                     UpdateStatusBar();
                     Redraw();
                     break;
+                case Gdk.Key.c:
+                case Gdk.Key.C:
+                    editor.ToggleDetachedSelected();
+                    UpdateInspector();
+                    UpdateStatusBar();
+                    Redraw();
+                    break;
                 default:
                     caught = false;
                     break;

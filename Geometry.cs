@@ -14,6 +14,8 @@ namespace Weland {
 	public static bool FilterPoints = false;
 	public static bool RememberDeletedSides = false;
 
+	public static List<short> DetachedPolygonIndexes = new();
+
 	Dictionary<short, Side> ClockwiseOrphanedSides = new Dictionary<short, Side>();
 	Dictionary<short, Side> CounterClockwiseOrphanedSides = new Dictionary<short, Side>();
 	HashSet<short> LinesReflectingOrphanedSides = new HashSet<short>();
@@ -733,7 +735,19 @@ namespace Weland {
             }
         }
 
-	public void DeletePolygon(short index) {
+		public void ToggleDetachedPolygon(short index)
+        {
+            if (DetachedPolygonIndexes.Contains(index))
+            {
+                DetachedPolygonIndexes.Remove(index);
+            }
+            else
+            {
+                DetachedPolygonIndexes.Add(index);
+            }
+        }
+
+public void DeletePolygon(short index) {
 	    Polygon polygonRef = Polygons[index];
 	    
 	    short platformIndex = -1;

@@ -209,7 +209,7 @@ namespace Weland
                     {
                         code &= Points[polygon.EndpointIndexes[v]];
                     }
-                    if (code == CohenSutherland.Inside && Filter(polygon))
+                    if (code == CohenSutherland.Inside && Filter(polygon) && !Level.DetachedPolygonIndexes.Contains((short)i))
                     {
                         DrawPolygon((short)i, PolygonColor.Normal);
                     }
