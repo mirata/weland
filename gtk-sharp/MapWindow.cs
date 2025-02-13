@@ -1246,7 +1246,11 @@ namespace Weland
                     var exporter = new UDBExporter(Level);
                     exporter.Export(d.Filename);
 
-                    Weland.Settings.PutSetting("LastSave/Folder", Path.GetDirectoryName(d.Filename));
+                    //Weland.Settings.PutSetting("LastSave/Folder", Path.GetDirectoryName(d.Filename));
+                    //MessageDialog m = new MessageDialog(window1, DialogFlags.DestroyWithParent, MessageType.Info, ButtonsType.Close, "Export complete.");
+                    //m.Title = "Export Complete";
+                    //m.Run();
+                    //m.Destroy();
                 }
             }
             catch (Exception e)

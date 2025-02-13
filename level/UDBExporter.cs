@@ -10,14 +10,21 @@ using System.Drawing.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Net.WebSockets;
+using Cairo;
+using Gdk;
+using static GLib.Signal;
+using System.Diagnostics.Metrics;
+using System.Reflection.Metadata;
+using System.Runtime.InteropServices.JavaScript;
+using System.Reflection;
 
-namespace Weland
+namespace Weland;
+
+public class UDBExporter
 {
-    public class UDBExporter
-    {
-        const double Scale = 64.0;
+    const double Scale = 64.0;
 
-        string[] itemNames = {
+    string[] itemNames = {
         "Knife",
         "Magnum Pistol",
         "Magnum Magazine",
@@ -56,7 +63,7 @@ namespace Weland
         "Submachine Gun Clip"
         };
 
-        string[] monsterNames = {
+    string[] monsterNames = {
             "Marine",
             "Tick Energy",
             "Tick Oxygen",
@@ -106,188 +113,264 @@ namespace Weland
             "Civilian Fusion Assimilated"
         };
 
-        Level level;
 
-        public UDBExporter(Level level)
+    string[] sceneryNames = [
+        "(L) Light Dirt",
+        "(L) Dark Dirt",
+        "(L) Bones",
+        "(L) Bone",
+        "(L) Ribs",
+        "(L) Skull",
+        "(L) Hanging Light #1",
+        "(L) Hanging Light #2",
+        "(L) Large Cylinder",
+        "(L) Small Cylinder",
+        "(L) Block #1",
+        "(L) Block #2",
+        "(L) Block #3",
+        "(W) Pistol Clip",
+        "(W) Short Light",
+        "(W) Long Light",
+        "(W) Siren",
+        "(W) Rocks",
+        "(W) Blood Drops",
+        "(W) Filtration Device",
+        "(W) Gun",
+        "(W) Bob Remains",
+        "(W) Puddles",
+        "(W) Big Puddles",
+        "(W) Security Monitor",
+        "(W) Alien Supply Can",
+        "(W) Machine",
+        "(W) Fighter's Staff",
+        "(S) Stubby Green Light",
+        "(S) Long Green Light",
+        "(S) Junk",
+        "(S) Big Antenna #1",
+        "(S) Big Antenna #2",
+        "(S) Alien Supply Can",
+        "(S) Bones",
+        "(S) Big Bones",
+        "(S) Pfhor Pieces",
+        "(S) Bob Pieces",
+        "(S) Bob Blood",
+        "(P) Green Light",
+        "(P) Small Alien Light",
+        "(P) Alien Ceiling Rod Light",
+        "(P) Bulbous Yellow Alien Object",
+        "(P) Square Grey Organic Object",
+        "(P) Pfhor Skeleton",
+        "(P) Pfhor Mask",
+        "(P) Green Stuff",
+        "(P) Hunter Shield",
+        "(P) Bones",
+        "(P) Alien Sludge",
+        "(J) Short Ceiling Light",
+        "(J) Long Light",
+        "(J) Weird Rod",
+        "(J) Pfhor Ship",
+        "(J) Sun",
+        "(J) Large Glass Container",
+        "(J) Nub #1",
+        "(J) Nub #2",
+        "(J) Lh'owon",
+        "(J) Floor Whip Antenna",
+        "(J) Ceiling Whip Antenna",
+    ];
+
+    Level level;
+
+    public UDBExporter(Level level)
+    {
+        this.level = level;
+    }
+
+    public void Export(string path)
+    {
+        var options = new JsonSerializerOptions
         {
-            this.level = level;
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = true
+        };
+
+        var map = new UdbLevel();
+
+        for (short i = 0; i < level.Lights.Count; i++)
+        {
+            map.Lights.Add(GetLight(level.Lights[i], i));
         }
 
-        public void Export(string path)
+        short index = 0;
+        foreach (Polygon p in level.Polygons)
         {
-            var options = new JsonSerializerOptions
+            var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
+            var floorHeight = p.FloorHeight;
+            var ceilingHeight = p.CeilingHeight;
+            if (platform != null)
             {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            };
-
-            var map = new UdbLevel();
-
-            short index = 0;
-            foreach (Polygon p in level.Polygons)
-            {
-                var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
-                var floorHeight = p.FloorHeight;
-                var ceilingHeight = p.CeilingHeight;
-                if (platform != null)
+                if (platform.ComesFromCeiling)
                 {
-                    if (platform.ComesFromCeiling)
+                    if (platform.InitiallyExtended)
                     {
-                        if (platform.InitiallyExtended)
-                        {
-                            ceilingHeight = platform.MinimumHeight;
-                        }
-                        else if (platform.MinimumHeight < p.CeilingHeight)
-                        {
-                            ceilingHeight = platform.MinimumHeight;
-                        }
+                        ceilingHeight = platform.MinimumHeight;
                     }
-                    if (platform.ComesFromFloor)
+                    else if (platform.MinimumHeight < p.CeilingHeight)
                     {
-                        if (platform.InitiallyExtended)
-                        {
-                            floorHeight = platform.MaximumHeight;
-                        }
-                        else if (platform.MaximumHeight > p.FloorHeight)
-                        {
-                            floorHeight = platform.MaximumHeight;
-                        }
+                        ceilingHeight = platform.MinimumHeight;
                     }
                 }
-
-                var lines = new List<UdbLine>();
-
-                for (var i = 0; i < p.VertexCount; ++i)
+                if (platform.ComesFromFloor)
                 {
-                    var pointStart = level.Endpoints[p.EndpointIndexes[i]];
-                    var pointEnd = level.Endpoints[p.EndpointIndexes[i == p.VertexCount - 1 ? 0 : i + 1]];
-                    var line = level.Lines[p.LineIndexes[i]];
-                    var side = p.SideIndexes[i] > -1 && p.SideIndexes[i] < level.Sides.Count ? level.Sides[p.SideIndexes[i]] : null;
-                    var pIndex = p.AdjacentPolygonIndexes[i];
-
-                    var adjacentPolygon = pIndex > -1 && pIndex < level.Polygons.Count ? level.Polygons[pIndex] : null;
-                    var adjacentPlatform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == pIndex);
-
-                    UdbTexture? upper = null;
-                    UdbTexture? middle = null;
-                    UdbTexture? lower = null;
-
-                    if (side != null)
+                    if (platform.InitiallyExtended)
                     {
-                        if (adjacentPolygon != null)
+                        floorHeight = platform.MaximumHeight;
+                    }
+                    else if (platform.MaximumHeight > p.FloorHeight)
+                    {
+                        floorHeight = platform.MaximumHeight;
+                    }
+                }
+            }
+
+            var lines = new List<UdbLine>();
+
+            for (var i = 0; i < p.VertexCount; ++i)
+            {
+                var pointStart = level.Endpoints[p.EndpointIndexes[i]];
+                var pointEnd = level.Endpoints[p.EndpointIndexes[i == p.VertexCount - 1 ? 0 : i + 1]];
+                var line = level.Lines[p.LineIndexes[i]];
+                var side = level.Sides.FirstOrDefault(e => e.LineIndex == p.LineIndexes[i] && e.PolygonIndex == index);// p.SideIndexes[i] > -1 && p.SideIndexes[i] < level.Sides.Count ? level.Sides[p.SideIndexes[i]] : null;
+                var adjacentPolyIndex = p.AdjacentPolygonIndexes[i];
+                //fallback as sometimes polyindexes are invalid. get the line and associates owners
+                if (adjacentPolyIndex > -1 && adjacentPolyIndex >= level.Polygons.Count)
+                {
+                    adjacentPolyIndex = line.ClockwisePolygonOwner == index ? line.CounterclockwisePolygonOwner : line.ClockwisePolygonOwner;
+                }
+
+                var adjacentPolygon = adjacentPolyIndex > -1 && adjacentPolyIndex < level.Polygons.Count ? level.Polygons[adjacentPolyIndex] : null;
+                var adjacentPlatform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == adjacentPolyIndex);
+
+                UdbTexture? upper = null;
+                UdbTexture? middle = null;
+                UdbTexture? lower = null;
+
+                if (side != null)
+                {
+                    if (adjacentPolygon != null)
+                    {
+                        if (side.Type == SideType.Split)
                         {
-                            if (adjacentPolygon.CeilingHeight < p.CeilingHeight && adjacentPolygon.FloorHeight > p.FloorHeight)
-                            {
-                                var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
-                                upper = GetUdbTexture(side.Primary, side.PrimaryTransferMode, yOffset);
-                                lower = GetUdbTexture(side.Secondary, side.SecondaryTransferMode);
-                            }
-                            else if (adjacentPolygon.CeilingHeight < p.CeilingHeight || (adjacentPlatform?.ComesFromCeiling ?? false))
-                            {
-                                var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
-                                upper = GetUdbTexture(side.Primary, side.PrimaryTransferMode, yOffset);
-                            }
-                            else if (adjacentPolygon.FloorHeight > p.FloorHeight || (adjacentPlatform?.ComesFromFloor ?? false))
-                            {
-                                lower = GetUdbTexture(side.Primary, side.PrimaryTransferMode);
-                            }
+                            var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
+                            upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
+                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode);
                         }
-                        else
+                        else if (side.Type == SideType.High)
                         {
-                            middle = GetUdbTexture(side.Primary, side.PrimaryTransferMode);
+                            var platformOffset = adjacentPlatform != null ? ConvertUnit(adjacentPlatform.MaximumHeight) - ConvertUnit(adjacentPlatform.MinimumHeight) : 0;
+                            var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight) + platformOffset;
+                            upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
+                        }
+                        else if (side.Type == SideType.Low)
+                        {
+                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode);
+                        }
+                        else if (side.Type == SideType.Full)
+                        {
+                            middle = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode);
                         }
                     }
                     else
                     {
-                        middle = new UdbTexture { Name = "F_SKY1", X = 0, Y = 0, Sky = true };
+                        middle = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode);
                     }
-
-                    var start = level.Endpoints[line.EndpointIndexes[0]];
-                    var end = level.Endpoints[line.EndpointIndexes[1]];
-
-                    lines.Add(new UdbLine
-                    {
-                        Start = new UdbVector
-                        {
-                            X = ConvertUnit(pointStart.X),
-                            Y = -ConvertUnit(pointStart.Y)
-                        },
-                        End = new UdbVector
-                        {
-                            X = ConvertUnit(pointEnd.X),
-                            Y = -ConvertUnit(pointEnd.Y)
-                        },
-                        Upper = upper,
-                        Middle = middle,
-                        Lower = lower,
-                        AdjacentPlatform = GetUdbAdjacentPlatform(adjacentPlatform),
-                    });
+                }
+                else
+                {
+                    middle = new UdbTexture { Name = "F_SKY1", X = 0, Y = 0, Sky = true };
                 }
 
-                if (Level.DetachedPolygonIndexes.Contains(index))
+                var start = level.Endpoints[line.EndpointIndexes[0]];
+                var end = level.Endpoints[line.EndpointIndexes[1]];
+
+                lines.Add(new UdbLine
                 {
-                    lines.ForEach(l =>
+                    Start = new UdbVector
                     {
-                        l.Start.X -= 2048;
-                        l.End.X -= 2048;
-                        l.Start.Y += 2048;
-                        l.End.Y += 2048;
-                    });
-                }
-
-                var sector = new UdbSector
-                {
-                    Index = index,
-                    FloorHeight = ConvertUnit(floorHeight),
-                    CeilingHeight = ConvertUnit(ceilingHeight),
-                    FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode) },
-                    CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode) },
-                    FloorBrightness = FormatBrightness(p.FloorLight),
-                    CeilingBrightness = FormatBrightness(p.CeilingLight),
-                    Platform = GetUdbPlatform(platform),
-                    Lines = lines
-                };
-
-                map.Sectors.Add(sector);
-
-                index++;
+                        X = ConvertUnit(pointStart.X),
+                        Y = -ConvertUnit(pointStart.Y)
+                    },
+                    End = new UdbVector
+                    {
+                        X = ConvertUnit(pointEnd.X),
+                        Y = -ConvertUnit(pointEnd.Y)
+                    },
+                    Upper = upper,
+                    Middle = middle,
+                    Lower = lower,
+                    IsSolid = adjacentPolygon != null && line.Solid
+                });
             }
 
-            foreach (var obj in level.Objects)
+            if (Level.DetachedPolygonIndexes.Contains(index))
             {
-                var thing = GetUdbThing(obj);
-                if (thing != null)
+                lines.ForEach(l =>
                 {
-                    map.Things.Add(thing);
-                }
+                    l.Start.X -= 2048;
+                    l.End.X -= 2048;
+                    l.Start.Y += 2048;
+                    l.End.Y += 2048;
+                });
             }
 
-            using (TextWriter w = new StreamWriter(path))
+            var sector = new UdbSector
             {
-                w.WriteLine($@"/// <reference path=""../udbscript.d.ts"" />
+                Index = index,
+                FloorHeight = ConvertUnit(floorHeight),
+                CeilingHeight = ConvertUnit(ceilingHeight),
+                FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
+                CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
+                Platform = GetUdbPlatform(platform),
+                Lines = lines
+            };
+
+            map.Sectors.Add(sector);
+
+            index++;
+        }
+
+        foreach (var obj in level.Objects.Where(e => !e.NetworkOnly))
+        {
+            var thing = GetUdbThing(obj);
+            if (thing != null)
+            {
+                map.Things.Add(thing);
+            }
+        }
+        //lightabsolute_bottom, lightabsolute_mid, lightabsolute_top, lightabsolute, light, light_top, light_mid, light_bottom
+        using (TextWriter w = new StreamWriter(path))
+        {
+            w.WriteLine($@"/// <reference path=""../udbscript.d.ts"" />
 `#version 4`;
 
 `#name {level.Name}`;
 
 let count = 0;
 
-const lineMatch = (line1, line2) => {{
+const lineMatch = (line1, line2, tolerance = 0.001) => {{
   const isCollinear = (p1, p2, p3) => {{
-    // UDB.showMessage(`${{p1.x}}, ${{p1.y}}, ${{p2.x}}, ${{p2.y}}, ${{p3.x}}, ${{p3.y}}`);
-    return (p3.y - p1.y) * (p2.x - p1.x) === (p2.y - p1.y) * (p3.x - p1.x);
+    return Math.abs((p3.y - p1.y) * (p2.x - p1.x) - (p2.y - p1.y) * (p3.x - p1.x)) < tolerance;
   }};
 
   const isWithinBounds = (p, p1, p2) => {{
-    return Math.min(p1.x, p2.x) <= p.x && p.x <= Math.max(p1.x, p2.x) && Math.min(p1.y, p2.y) <= p.y && p.y <= Math.max(p1.y, p2.y);
+    return Math.min(p1.x, p2.x) - tolerance <= p.x && p.x <= Math.max(p1.x, p2.x) + tolerance && Math.min(p1.y, p2.y) - tolerance <= p.y && p.y <= Math.max(p1.y, p2.y) + tolerance;
   }};
 
-  const valid = isCollinear(line1[0], line1[1], line2[0]) && isCollinear(line1[0], line1[1], line2[1]) && isWithinBounds(line2[0], line1[0], line1[1]) && isWithinBounds(line2[1], line1[0], line1[1]);
-  return valid;
+  return isCollinear(line1[0], line1[1], line2[0]) && isCollinear(line1[0], line1[1], line2[1]) && isWithinBounds(line2[0], line1[0], line1[1]) && isWithinBounds(line2[1], line1[0], line1[1]);
 }};
 
 allSectorLines = [];
 
-const drawSector = (sector, debug = false) => {{
+const drawSector = async (sector, debug = false) => {{
   UDB.Map.drawLines([new UDB.Vector2D(sector.lines[0].start.x, sector.lines[0].start.y), ...sector.lines.map((l) => new UDB.Vector2D(l.end.x, l.end.y))]);
 
   let sectors = UDB.Map.getMarkedSectors();
@@ -306,27 +389,30 @@ const drawSector = (sector, debug = false) => {{
     s.ceilingHeight = sector.ceilingHeight;
     s.floorTexture = sector.floorTexture.sky ? ""F_SKY1"" : sector.floorTexture.name;
     s.ceilingTexture = sector.ceilingTexture.sky ? ""F_SKY1"" : sector.ceilingTexture.name;
-    s.brightness = sector.floorBrightness;
-    if (sector.ceilingBrightness !== sector.floorBrightness) {{
+    s.brightness = getBrightness(sector.floorTexture.lightIndex);
+    if (sector.ceilingTexture.lightIndex !== sector.floorTexture.lightIndex) {{
       s.fields.lightceilingabsolute = true;
-      s.fields.lightceiling = sector.ceilingBrightness;
+      s.fields.lightceiling = getBrightness(sector.ceilingTexture.lightIndex);
     }} else {{
       s.fields.lightceilingabsolute = false;
       s.fields.lightceiling = 0;
     }}
 
     for (let l of s.getSidedefs()) {{
-      const sectorLine = sector.lines.find((x) => lineMatch([x.start, x.end], [l.line.line.v1, l.line.line.v2]));
+      const sectorLine = sector.lines.find((x) => {{
+        // UDB.showMessage(`[${{x.start.x}}, ${{x.start.y}}] - [${{x.end.x}}, ${{x.end.y}}], [${{l.line.line.v1.x}}, ${{l.line.line.v1.y}}] - [${{l.line.line.v2.x}}, ${{l.line.line.v2.y}}]`);
+        return lineMatch([x.start, x.end], [l.line.line.v1, l.line.line.v2]);
+      }});
       if (!sectorLine) {{
         continue;
       }}
 
-      allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine }});
+      allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector }});
     }}
   }}
   count++;
   if (count % 50 === 0) {{
-    UDB.showMessageYesNo(`${{count}}`);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }}
 }};
 
@@ -335,34 +421,63 @@ const addThing = (thing) => {{
   t.angle = thing.angle;
 }};
 
+const getBrightness = (lightIndex) => {{
+  return level.lights[lightIndex].primaryInactive.intensity;
+}};
+
 const applySideTextures = () => {{
   for (const sl of allSectorLines) {{
-    const line = UDB.Map.getSidedefs()[sl.sideIndex];
-    if (sl.sectorLine.upper) {{
-      if (sl.sectorLine.upper.sky) {{
+    const {{ sideIndex, sectorLine, sector }} = sl;
+
+    const line = UDB.Map.getSidedefs()[sideIndex];
+    line.line.flags[""blockeverything""] = sectorLine.isSolid;
+
+    if (sectorLine.upper) {{
+      if (sectorLine.upper.sky) {{
         line.upperTexture = ""-"";
       }} else {{
-        line.upperTexture = sl.sectorLine.upper.name;
-        line.fields.offsetx_top = sl.sectorLine.upper.x;
-        line.fields.offsety_top = sl.sectorLine.upper.y;
+        line.upperTexture = sectorLine.upper.name;
+        line.fields.offsetx_top = sectorLine.upper.x;
+        line.fields.offsety_top = sectorLine.upper.y;
+      }}
+      if (sectorLine.upper.lightIndex !== sector.floorTexture.lightIndex) {{
+        line.fields.lightabsolute_top = true;
+        line.fields.light_top = getBrightness(sectorLine.upper.lightIndex);
+      }} else {{
+        line.fields.lightabsolute_top = false;
+        line.fields.light_top = 0;
       }}
     }}
-    if (sl.sectorLine.middle) {{
-      if (sl.sectorLine.middle.sky) {{
+    if (sectorLine.middle) {{
+      if (sectorLine.middle.sky) {{
         line.middleTexture = ""-"";
       }} else {{
-        line.middleTexture = sl.sectorLine.middle.name;
-        line.fields.offsetx_mid = sl.sectorLine.middle.x;
-        line.fields.offsety_mid = sl.sectorLine.middle.y;
+        line.middleTexture = sectorLine.middle.name;
+        line.fields.offsetx_mid = sectorLine.middle.x;
+        line.fields.offsety_mid = sectorLine.middle.y;
+      }}
+      if (sectorLine.middle.lightIndex !== sector.floorTexture.lightIndex) {{
+        line.fields.lightabsolute_mid = true;
+        line.fields.light_mid = getBrightness(sectorLine.middle.lightIndex);
+      }} else {{
+        line.fields.lightabsolute_mid = false;
+        line.fields.light_mid = 0;
       }}
     }}
-    if (sl.sectorLine.lower) {{
-      if (sl.sectorLine.lower.sky) {{
+    if (sectorLine.lower) {{
+      if (sectorLine.lower.sky) {{
         line.lowerTexture = ""-"";
       }} else {{
-        line.lowerTexture = sl.sectorLine.lower.name;
-        line.fields.offsetx_bottom = sl.sectorLine.lower.x;
-        line.fields.offsety_bottom = sl.sectorLine.lower.y;
+        line.lowerTexture = sectorLine.lower.name;
+        line.fields.offsetx_bottom = sectorLine.lower.x;
+        line.fields.offsety_bottom = sectorLine.lower.y;
+      }}
+      if (sectorLine.lower.lightIndex !== sector.floorTexture.lightIndex) {{
+        line.fields.lightabsolute_bottom = true;
+        line.fields.light_bottom = getBrightness(sectorLine.lower.lightIndex);
+      }} else {{
+        line.fields.lightabsolute_bottom = false;
+        line.fields.light_bottom = 0;
       }}
     }}
   }}
@@ -370,199 +485,308 @@ const applySideTextures = () => {{
 
 const level = {JsonSerializer.Serialize(map, options)};
 
-for (const sector of level.sectors) {{
-  drawSector(sector);
-}}
-
-for (const thing of level.things) {{
-  {{
-    addThing(thing);
+const create = async () => {{
+  for (const sector of level.sectors) {{
+    drawSector(sector);
   }}
-}}
 
-applySideTextures();
+  for (const thing of level.things) {{
+    {{
+      addThing(thing);
+    }}
+  }}
+
+  applySideTextures();
+}};
+
+create().then();
 ");
-            }
         }
+    }
 
-        private UdbThing? GetUdbThing(MapObject obj)
+    private UdbThing? GetUdbThing(MapObject obj)
+    {
+        var type = GetThingType(obj);
+        if (type == null)
         {
-            var type = GetThingType(obj);
-            if (type == null)
-            {
-                return null;
-            }
-
-            return new UdbThing
-            {
-                Type = type.Value,
-                X = ConvertUnit(obj.X),
-                Y = -ConvertUnit(obj.Y),
-                Z = ConvertUnit(obj.Z),
-                Angle = 360.0 - obj.Facing
-            };
-        }
-
-        private int? GetThingType(MapObject obj)
-        {
-            if(obj.Type == ObjectType.Player)
-            {
-                return 1;
-            }
-
-            var name = GetThingName(obj);
-            switch (name)
-            {
-                case "Fighter Minor":
-                    return 16000;
-                case "Fighter Major":
-                    return 16001;
-                case "Fighter Minor Projectile":
-                    return 16002;
-                case "Fighter Major Projectile":
-                    return 16003;
-                case "Compiler Minor":
-                    return 16010;
-                case "Compiler Major":
-                    return 16011;
-                case "Compiler Minor Invisible":
-                    return 16012;
-                case "Compiler Major Invisible":
-                    return 16013;
-                default:
-                    return null;
-
-
-                    //16000 = "Fighter1"
-                    //16001 = "Fighter2"
-                    //16002 = "Fighter3"
-                    //16003 = "Fighter4"
-                    //16010 = "Compiler1"
-                    //16011 = "Compiler2"
-                    //16012 = "Compiler3"
-                    //16013 = "Compiler4"
-                    //16020 = "Trooper1"
-                    //16021 = "Trooper2"
-                    //16030 = "Bob1"
-                    //16031 = "Bob2"
-                    //16032 = "Bob3"
-                    //16033 = "Bob4"
-                    //16040 = "Enforcer1"
-                    //16041 = "Enforcer2"
-                    //16051 = "Hunter1"
-                    //16052 = "Hunter2"
-                    //16061 = "Wasp1"
-                    //16062 = "Wasp2"
-                    //16063 = "Wasp3"
-                    //16071 = "Hulk1"
-                    //16072 = "Hulk2"
-                    //17000 = "Juggernaut"
-            }
-        }
-
-        private string? GetThingName(MapObject obj)
-        {
-            switch (obj.Type)
-            {
-                case ObjectType.Monster:
-                    return monsterNames[obj.Index];
-                case ObjectType.Item:
-                    return itemNames[obj.Index];
-            }
             return null;
         }
 
-        private UdbTexture? GetUdbTexture(TextureDefinition? texture, short transferMode, double? yOffset = null)
+        var t = new UdbThing
         {
-            if (texture == null)
-            {
+            Type = type.Value,
+            X = ConvertUnit(obj.X),
+            Y = -ConvertUnit(obj.Y),
+            Z = ConvertUnit(obj.Z),
+            Angle = 360.0 - obj.Facing
+        };
+
+        if (Level.DetachedPolygonIndexes.Contains(obj.PolygonIndex))
+        {
+            t.X -= 2048;
+            t.Y += 2048;
+        }
+
+        return t;
+    }
+
+    private int? GetThingType(MapObject obj)
+    {
+        if (obj.Type == ObjectType.Player)
+        {
+            return 1;
+        }
+
+        if (obj.Type == ObjectType.Goal)
+        {
+            return 9001;
+        }
+
+        var name = GetThingName(obj);
+        switch (name)
+        {
+            //monsters
+            case "Fighter Minor":
+                return 16000;
+            case "Fighter Major":
+                return 16001;
+            case "Fighter Minor Projectile":
+                return 16002;
+            case "Fighter Major Projectile":
+                return 16003;
+            case "Compiler Minor":
+                return 16010;
+            case "Compiler Major":
+                return 16011;
+            case "Compiler Minor Invisible":
+                return 16012;
+            case "Compiler Major Invisible":
+                return 16013;
+
+            //items
+            case "Magnum Pistol":
+                return 5010;
+            case "Magnum Magazine":
+                return 2007;
+            case "Plasma Pistol":
+                return 2004;
+            case "Plasma Energy Cell":
+                return 2047;
+            case "Assault Rifle":
+                return 2002;
+            case "AR Magazine":
+                return 2048;
+            case "AR Grenade Magazine":
+                return 2010;
+            case "Missile Launcher":
+                return 2003;
+            case "Missile 2-Pack":
+                return 2046;
+            case "Flamethrower":
+                return 82;
+            case "Flamethrower Canister":
+                return 17;
+            case "Alien Weapon":
+                return 2006;
+            //"Invisibility Powerup",
+            //"Invincibility Powerup",
+            //"Infravision Powerup",
+
+
+            //scenery
+            case "(S) Big Bones":
+                return 30000;
+            case "(S) Pfhor Pieces":
+                return 30001;
+            case "(S) Bob Pieces":
+                return 30008;
+            case "(S) Bob Blood":
+                return 30010;
+            case "(S) Big Antenna #1":
+                return 30006;
+            case "(S) Big Antenna #2":
+                return 30004;
+            default:
                 return null;
-            }
-            return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = ConvertUnit(texture.Value.X), Y = ConvertUnit(texture.Value.Y) + (yOffset ?? 0), Sky = GetSky(transferMode) };
-        }
 
-        private bool GetSky(short transferMode)
-        {
-            return (transferMode == 9);
-        }
 
-        private UdbPlatform? GetUdbPlatform(Platform? platform)
-        {
-            if (platform == null)
-            {
-                return null;
-            }
-            return new UdbPlatform
-            {
-                MaxHeight = ConvertUnit(platform.MaximumHeight),
-                MinHeight = ConvertUnit(platform.MinimumHeight),
-                Speed = platform.Speed,
-                Delay = platform.Delay,
-                IsDoor = platform.IsDoor,
-                IsCeiling = platform.ComesFromCeiling,
-                IsFloor = platform.ComesFromFloor,
-                IsExtended = platform.InitiallyExtended,
-                IsLocked = platform.IsLocked,
-                IsPlayerControl = platform.IsPlayerControllable,
-                IsMonsterControl = (platform.IsMonsterControllable),
-            };
-        }
-
-        private UdbAdjacentPlatform? GetUdbAdjacentPlatform(Platform? platform)
-        {
-            if (platform == null)
-            {
-                return null;
-            }
-            return new UdbAdjacentPlatform { IsCeiling = platform.ComesFromCeiling, IsFloor = platform.ComesFromFloor };
-        }
-
-        private string FormatTextureName(ShapeDescriptor shapeDescriptor)
-        {
-            var env = level.Environment + 1;
-            if (env == 5)
-            {
-                env = 4;
-            }
-
-            var texId = shapeDescriptor.Bitmap;
-            if (env == 3 && texId > 27)
-            {
-                texId -= 2;
-            }
-            else if (env == 3 && texId > 13)
-            {
-                texId--;
-            }
-            else if (env == 1 && texId > 30)
-            {
-                texId--;
-            }
-            else if (env == 4 && texId > 10)
-            {
-                texId--;
-            }
-
-            return $"{(env)}SET{texId.ToString("00")}";
-        }
-
-        private short FormatBrightness(short lightId)
-        {
-            var intensity = level.Lights[lightId].PrimaryInactive.Intensity;
-            return (short)((intensity * 155) + 100);
-        }
-
-        private double ConvertUnit(short val)
-        {
-            return Math.Round(World.ToDouble(val) * Scale, 3);
+                //16000 = "Fighter1"
+                //16001 = "Fighter2"
+                //16002 = "Fighter3"
+                //16003 = "Fighter4"
+                //16010 = "Compiler1"
+                //16011 = "Compiler2"
+                //16012 = "Compiler3"
+                //16013 = "Compiler4"
+                //16020 = "Trooper1"
+                //16021 = "Trooper2"
+                //16030 = "Bob1"
+                //16031 = "Bob2"
+                //16032 = "Bob3"
+                //16033 = "Bob4"
+                //16040 = "Enforcer1"
+                //16041 = "Enforcer2"
+                //16051 = "Hunter1"
+                //16052 = "Hunter2"
+                //16061 = "Wasp1"
+                //16062 = "Wasp2"
+                //16063 = "Wasp3"
+                //16071 = "Hulk1"
+                //16072 = "Hulk2"
+                //17000 = "Juggernaut"
         }
     }
+
+    private string? GetThingName(MapObject obj)
+    {
+        switch (obj.Type)
+        {
+            case ObjectType.Monster:
+                return monsterNames[obj.Index];
+            case ObjectType.Item:
+                return itemNames[obj.Index];
+            case ObjectType.Scenery:
+                return sceneryNames[obj.Index];
+        }
+        return null;
+    }
+
+    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, double? yOffset = null)
+    {
+        if (texture == null)
+        {
+            return null;
+        }
+        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = ConvertUnit(texture.Value.X), Y = ConvertUnit(texture.Value.Y) + (yOffset ?? 0), Sky = GetSky(transferMode), LightIndex = lightSourceIndex };
+    }
+
+    public UdbLight GetLight(Light light, short index)
+    {
+        return new UdbLight
+        {
+            Index = index,
+            InitiallyActive = light.InitiallyActive,
+            PrimaryActive = GetLightState(light.PrimaryActive),
+            SecondaryActive = GetLightState(light.SecondaryActive),
+            PrimaryInactive = GetLightState(light.PrimaryActive),
+            SecondaryInactive = GetLightState(light.SecondaryInactive),
+            BecomingActive = GetLightState(light.BecomingActive),
+            BecomingInactive = GetLightState(light.BecomingInactive)
+        };
+    }
+
+    public UdbLightState GetLightState(Light.Function lightState)
+    {
+        return new UdbLightState
+        {
+            Function = lightState.LightingFunction.ToString(),
+            Intensity = FormatIntensity(lightState.Intensity),
+            DeltaIntensity = FormatIntensity(lightState.DeltaIntensity),
+            Period = FormatTicks(lightState.Period),
+            DeltaPeriod = FormatTicks(lightState.DeltaPeriod)
+        };
+    }
+
+    private bool GetSky(short transferMode)
+    {
+        return (transferMode == 9);
+    }
+
+    private UdbPlatform? GetUdbPlatform(Platform? platform)
+    {
+        if (platform == null)
+        {
+            return null;
+        }
+        return new UdbPlatform
+        {
+            MaxHeight = ConvertUnit(platform.MaximumHeight),
+            MinHeight = ConvertUnit(platform.MinimumHeight),
+            Speed = platform.Speed,
+            Delay = platform.Delay,
+            IsDoor = platform.IsDoor,
+            IsCeiling = platform.ComesFromCeiling,
+            IsFloor = platform.ComesFromFloor,
+            IsExtended = platform.InitiallyExtended,
+            IsLocked = platform.IsLocked,
+            IsPlayerControl = platform.IsPlayerControllable,
+            IsMonsterControl = (platform.IsMonsterControllable),
+        };
+    }
+
+    private string FormatTextureName(ShapeDescriptor shapeDescriptor)
+    {
+        var env = level.Environment + 1;
+        if (env == 5)
+        {
+            env = 4;
+        }
+
+        var texId = shapeDescriptor.Bitmap;
+        if (env == 3 && texId > 27)
+        {
+            texId -= 2;
+        }
+        else if (env == 3 && texId > 13)
+        {
+            texId--;
+        }
+        else if (env == 1 && texId > 30)
+        {
+            texId--;
+        }
+        else if (env == 4 && texId > 10)
+        {
+            texId--;
+        }
+
+        return $"{(env)}SET{texId.ToString("00")}";
+    }
+
+    private short FormatIntensity(double intensity)
+    {
+        return (short)((intensity * 155) + 100);
+    }
+
+    private short FormatTicks(double marathonTicks)
+    {
+        return (short)((double)marathonTicks / 30 * 35);
+    }
+
+
+    private double ConvertUnit(short val)
+    {
+        return Math.Round(World.ToDouble(val) * Scale, 3);
+    }
 }
+
 
 public class UdbLevel
 {
     public List<UdbSector> Sectors { get; set; } = [];
+    public List<UdbLight> Lights { get; set; } = [];
     public List<UdbThing> Things { get; set; } = [];
+}
+
+public class UdbLight
+{
+    public int Index { get; set; }
+    public bool InitiallyActive { get; set; }
+    public required UdbLightState PrimaryActive { get; set; }
+    public required UdbLightState SecondaryActive { get; set; }
+    public required UdbLightState PrimaryInactive { get; set; }
+    public required UdbLightState SecondaryInactive { get; set; }
+    public required UdbLightState BecomingActive { get; set; }
+    public required UdbLightState BecomingInactive { get; set; }
+}
+
+public class UdbLightState
+{
+    public required string Function { get;set; }
+    public short Intensity { get; set; }
+    public short DeltaIntensity { get; set; }
+    public short Period { get; set; }
+    public short DeltaPeriod { get; set; }
 }
 
 public class UdbSector
@@ -572,8 +796,6 @@ public class UdbSector
     public double CeilingHeight { get; set; }
     public required UdbTexture FloorTexture { get; set; }
     public required UdbTexture CeilingTexture { get; set; }
-    public short FloorBrightness { get; set; }
-    public short CeilingBrightness { get; set; }
     public UdbPlatform? Platform { get; set; }
     public List<UdbLine> Lines { get; set; } = [];
 }
@@ -600,13 +822,7 @@ public class UdbLine
     public UdbTexture? Upper { get; set; }
     public UdbTexture? Middle { get; set; }
     public UdbTexture? Lower { get; set; }
-    public UdbAdjacentPlatform? AdjacentPlatform { get; set; }
-}
-
-public class UdbAdjacentPlatform
-{
-    public bool IsCeiling { get; set; }
-    public bool IsFloor { get; set; }
+    public bool IsSolid { get; set; }
 }
 
 public class UdbVector
@@ -621,6 +837,7 @@ public class UdbTexture
     public double X { get; set; }
     public double Y { get; set; }
     public bool Sky { get; set; }
+    public int LightIndex { get; set; }
 }
 
 public class UdbThing
