@@ -187,6 +187,8 @@ public class UDBExporter
 
     public void Export(string path)
     {
+        var scriptPath = System.IO.Path.ChangeExtension(path, ".acs");
+
         var options = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -195,14 +197,46 @@ public class UDBExporter
 
         var map = new UdbLevel();
 
+        var initialisedLights = new HashSet<short>();
+
         for (short i = 0; i < level.Lights.Count; i++)
         {
-            map.Lights.Add(GetLight(level.Lights[i], i));
+            var light = level.Lights[i];
+            if (!IsUnchangingState(light))
+            {
+                initialisedLights.Add(i);
+            }
+
+            map.Lights.Add(GetLight(light, i));
         }
 
-        short index = 0;
-        foreach (Polygon p in level.Polygons)
+
+        var activatedLights = new HashSet<short>();
+
+        for (short index = 0; index < level.Platforms.Count; index++)
         {
+            var platform = level.Platforms[index];
+            if (platform.ActivatesLight)
+            {
+                var polygon = level.Polygons[platform.PolygonIndex];
+                activatedLights.Add(polygon.FloorLight);
+            }
+        }
+
+        for (short index = 0; index < level.Sides.Count; index++)
+        {
+            var side = level.Sides[index];
+            if (side.IsControlPanel && side.IsLightSwitch())
+            {
+                activatedLights.Add(side.ControlPanelPermutation);
+            }
+        }
+
+        var controlledLightIndexes = initialisedLights.Concat(activatedLights).ToHashSet();
+
+        for (short index = 0; index < level.Polygons.Count; index++)
+        {
+            var p = level.Polygons[index];
             var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
             var floorHeight = p.FloorHeight;
             var ceilingHeight = p.CeilingHeight;
@@ -330,12 +364,11 @@ public class UDBExporter
                 FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
                 CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
                 Platform = GetUdbPlatform(platform),
-                Lines = lines
+                Lines = lines,
+                LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null
             };
 
             map.Sectors.Add(sector);
-
-            index++;
         }
 
         foreach (var obj in level.Objects.Where(e => !e.NetworkOnly))
@@ -347,9 +380,9 @@ public class UDBExporter
             }
         }
         //lightabsolute_bottom, lightabsolute_mid, lightabsolute_top, lightabsolute, light, light_top, light_mid, light_bottom
-        using (TextWriter w = new StreamWriter(path))
+        using var writer = new StreamWriter(path);
         {
-            w.WriteLine($@"/// <reference path=""../udbscript.d.ts"" />
+            writer.WriteLine($@"/// <reference path=""../udbscript.d.ts"" />
 `#version 4`;
 
 `#name {level.Name}`;
@@ -379,6 +412,9 @@ const drawSector = async (sector, debug = false) => {{
       s.addTag(s.index);
     }} else {{
       s.tag = null;
+    }}
+    if (sector.lightSectorTagId) {{
+      s.addTag(sector.lightSectorTagId);
     }}
     s.fields.rotationfloor = 90;
     s.fields.rotationceiling = 90;
@@ -422,7 +458,8 @@ const addThing = (thing) => {{
 }};
 
 const getBrightness = (lightIndex) => {{
-  return level.lights[lightIndex].primaryInactive.intensity;
+  const light = level.lights[lightIndex];
+  return light.initiallyActive ? light.primaryActive.intensity : light.primaryInactive.intensity;
 }};
 
 const applySideTextures = () => {{
@@ -501,6 +538,198 @@ const create = async () => {{
 
 create().then();
 ");
+        }
+
+        using var acsWriter = new StreamWriter(scriptPath);
+
+        acsWriter.WriteLine($@"#include ""zcommon.acs""
+
+Script ""InitialiseLighting"" ENTER
+{{");
+        foreach (var i in initialisedLights)
+        {
+            var light = level.Lights[i];
+            if(light.InitiallyActive)
+            {
+                acsWriter.WriteLine($@" ACS_NamedExecute(""Light{i}Active"", 0);");
+            }
+            else
+            {
+                acsWriter.WriteLine($@" ACS_NamedExecute(""Light{i}Inactive"", 0);");
+            }
+        }
+        acsWriter.WriteLine($@"}}
+");
+        for (var i = 0; i < level.Lights.Count; i++)
+        {
+            var light = level.Lights[i];
+            var tagId = 500 + i;
+            acsWriter.WriteLine($@"
+
+//----------- Light {i} -------------
+bool light{i}On = {light.InitiallyActive.ToString().ToLower()};
+
+script ""Light{i}Switch"" (int tagId, int soundTagId)
+{{
+	ACS_NamedTerminate(""Light{i}Active"", 0);
+	ACS_NamedTerminate(""Light{i}Inactive"", 0);
+	ACS_NamedTerminate(""Light{i}Change"", 0);
+	Delay(1);
+	light{i}On = !light{i}On;
+	toggleSwitch(tagId, soundTagId, light{i}On);
+
+	if(light{i}On)
+	{{
+		ACS_NamedExecute(""Light{i}Change"", 0, 1);
+	}}
+	else
+	{{
+		ACS_NamedExecute(""Light{i}Change"", 0, 0);
+	}}
+}}
+
+script ""Light{i}Active"" (void)
+{{
+	int period;
+	int lightVal;
+
+	int ticks = 0;
+	int initial = GetSectorLightLevel({tagId});
+	while(true)
+	{{
+		{FormatLightFn(tagId, light.PrimaryActive)}
+		{FormatLightFn(tagId, light.SecondaryActive)}
+	}}
+}}
+
+script ""Light{i}Inactive"" (void)
+{{
+	int period;
+	int lightVal;
+
+	int ticks = 0;
+	int initial = GetSectorLightLevel({tagId});
+	while(true)
+	{{
+		{FormatLightFn(tagId, light.PrimaryInactive)}
+		{FormatLightFn(tagId, light.SecondaryInactive)}
+	}}
+}}
+
+script ""Light{i}Change"" (int active)
+{{
+	int period;
+	int lightVal;
+
+	int ticks = 0;
+	int initial = GetSectorLightLevel({tagId});
+	if(active == 1)
+	{{
+		{FormatLightFn(tagId, light.BecomingActive)}
+		ACS_NamedExecute(""Light{i}Active"", 0, 0);
+	}}
+	else
+	{{
+		{FormatLightFn(tagId, light.BecomingInactive)}
+		ACS_NamedExecute(""Light{i}Inactive"", 0, 0);
+	}}
+}}
+
+");
+        }
+
+        acsWriter.WriteLine($@"
+function void toggleSwitch(int tagId, int soundTagId, bool active) {{
+	if(active){{
+		SetLineTexture(tagId, SIDE_FRONT, TEXTURE_MIDDLE, ""SWON"");
+		PlaySound(soundTagId, ""MSWON"");
+	}}
+	else {{
+		SetLineTexture(tagId, SIDE_FRONT, TEXTURE_MIDDLE, ""SWOFF"");
+		PlaySound(soundTagId, ""MSWOFF"");
+	}}
+}}
+
+function int lightFn(int fn, int phase, int intensity, int intensityDelta, int currentIntensity, int ticks)
+{{
+	int v;
+	switch(fn)
+	{{
+		case 0:
+			v =  intensity * 100;
+			//Print(s:""Constant"", d:v);
+			break;
+		case 1:
+			int linearFrac = (intensity - currentIntensity) * 100 / phase;
+			v = (currentIntensity * 100) + (linearFrac * ticks);
+			if(ticks > phase){{
+				v = intensity * 100;
+			}}
+			//Print(s:""Fade"", d:currentIntensity, s:"" -> "", d:intensity, s:"" - "", d:frac);
+			break;
+		case 2:
+			int smoothFrac = (intensity - currentIntensity) * 100 / phase;
+			v = (currentIntensity * 100) + (smoothFrac * ticks);
+			if(ticks > phase){{
+				v = intensity * 100;
+			}}
+			//Print(s:""Smooth"", d:currentIntensity, s:"" -> "", d:intensity, s:"" - "", d:frac);
+			break;
+		case 3:
+			int d = Random(intensityDelta * -100.0, intensityDelta * 100.0);
+			Print(f:d);
+			v = (intensity * 100) + d;
+			if(v > 25500)
+			{{
+				v = 25500;
+			}}
+			else if(v < 15000)
+			{{
+				v = 15000;
+			}}
+			//Print(s:""Smooth"", d:currentIntensity, s:"" -> "", d:intensity, s:"" - "", d:frac);
+			break;
+		default:
+			break;
+	}}
+	return v / 100;
+}}
+
+function int abs (int x)
+{{
+    if (x < 0)
+        return -x;
+
+    return x;
+}}");
+    }
+
+    private string FormatLightFn(int tagId, Light.Function fn)
+    {
+        return $@"ticks = 0;
+        period = {FormatTicks(fn.Period)}{(fn.DeltaPeriod > 0 ? $" + Random(-{FormatTicks(fn.DeltaPeriod)}, {FormatTicks(fn.DeltaPeriod)})" : string.Empty)};
+		while(ticks <= period)
+		{{
+			lightVal = lightFn({GetLightFunction(fn)}, period, {FormatIntensity(fn.Intensity)}, {FormatIntensity(fn.DeltaIntensity, false)}, initial, ticks);
+			Light_ChangeToValue({tagId}, lightVal);
+			Delay(1);
+			ticks++;
+		}}
+";
+    }
+
+    private int GetLightFunction(Light.Function fn)
+    {
+        switch (fn.LightingFunction)
+        {
+            case LightingFunction.Linear:
+                return 1;
+            case LightingFunction.Smooth:
+                return 2;
+            case LightingFunction.Flicker:
+                return 3;
+            default:
+                return 0;
         }
     }
 
@@ -668,11 +897,23 @@ create().then();
             InitiallyActive = light.InitiallyActive,
             PrimaryActive = GetLightState(light.PrimaryActive),
             SecondaryActive = GetLightState(light.SecondaryActive),
-            PrimaryInactive = GetLightState(light.PrimaryActive),
+            PrimaryInactive = GetLightState(light.PrimaryInactive),
             SecondaryInactive = GetLightState(light.SecondaryInactive),
             BecomingActive = GetLightState(light.BecomingActive),
             BecomingInactive = GetLightState(light.BecomingInactive)
         };
+    }
+
+    public bool IsUnchangingState(Light light, bool? active = null)
+    {
+        var primary = light.InitiallyActive ? light.PrimaryActive : light.PrimaryInactive;
+        var secondary = light.InitiallyActive ? light.SecondaryActive : light.SecondaryInactive;
+        if (active.HasValue)
+        {
+            primary = active.Value ? light.PrimaryActive : light.PrimaryInactive;
+            secondary = active.Value ? light.SecondaryActive : light.SecondaryInactive;
+        }
+        return primary.LightingFunction == LightingFunction.Constant && secondary.LightingFunction == LightingFunction.Constant && primary.Intensity == secondary.Intensity;
     }
 
     public UdbLightState GetLightState(Light.Function lightState)
@@ -743,9 +984,9 @@ create().then();
         return $"{(env)}SET{texId.ToString("00")}";
     }
 
-    private short FormatIntensity(double intensity)
+    private short FormatIntensity(double intensity, bool includeMin = true)
     {
-        return (short)((intensity * 155) + 100);
+        return (short)((intensity * 155) + (includeMin ? 100 : 0));
     }
 
     private short FormatTicks(double marathonTicks)
@@ -782,7 +1023,7 @@ public class UdbLight
 
 public class UdbLightState
 {
-    public required string Function { get;set; }
+    public required string Function { get; set; }
     public short Intensity { get; set; }
     public short DeltaIntensity { get; set; }
     public short Period { get; set; }
@@ -797,6 +1038,7 @@ public class UdbSector
     public required UdbTexture FloorTexture { get; set; }
     public required UdbTexture CeilingTexture { get; set; }
     public UdbPlatform? Platform { get; set; }
+    public int? LightSectorTagId { get; set; }
     public List<UdbLine> Lines { get; set; } = [];
 }
 

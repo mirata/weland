@@ -74,9 +74,14 @@ namespace Weland {
 
 	public bool IsTagSwitch() {
 	    return controlPanelClasses[ControlPanelType] == ControlPanelClass.TagSwitch;
-	}
+        }
 
-	public SideType Type;
+        public bool IsLightSwitch()
+        {
+            return controlPanelClasses[ControlPanelType] == ControlPanelClass.LightSwitch;
+        }
+
+        public SideType Type;
 	public SideFlags Flags;
 	public TextureDefinition Primary;
 	public TextureDefinition Secondary;
