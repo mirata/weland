@@ -1,22 +1,5 @@
-using System;
-using System.IO;
-using System.Collections.Generic;
-using Pango;
-using static Weland.Side;
-using System.Xml.Linq;
-using Gtk;
-using Weland;
-using System.Drawing.Text;
-using System.Text.Json.Nodes;
 using System.Text.Json;
-using System.Net.WebSockets;
-using Cairo;
-using Gdk;
-using static GLib.Signal;
-using System.Diagnostics.Metrics;
-using System.Reflection.Metadata;
-using System.Runtime.InteropServices.JavaScript;
-using System.Reflection;
+using static Weland.Side;
 
 namespace Weland;
 
@@ -197,12 +180,12 @@ public class UDBExporter
 
         var map = new UdbLevel();
 
-        var lightSwitchMapInfos = new Dictionary<short, int>();
-        var platformSwitchMapInfos = new Dictionary<short, int>();
+        Dictionary<short, int> lightSwitchMapInfos = [];
+        Dictionary<short, int> platformSwitchMapInfos = [];
 
-        var initialisedLights = new HashSet<short>();
+        HashSet<short> initialisedLights = [];
 
-        var adjacentPlatforms = new Dictionary<short, HashSet<int>>();
+        Dictionary<short, HashSet<int>> adjacentPlatforms = [];
 
         for (short i = 0; i < level.Lights.Count; i++)
         {
@@ -216,7 +199,7 @@ public class UDBExporter
         }
 
 
-        var activatedLights = new HashSet<short>();
+        HashSet<short> activatedLights = [];
 
         for (short index = 0; index < level.Platforms.Count; index++)
         {
@@ -287,7 +270,7 @@ public class UDBExporter
                 }
             }
 
-            var lines = new List<UdbLine>();
+            List<UdbLine> lines = [];
 
             for (var i = 0; i < p.VertexCount; ++i)
             {
@@ -424,9 +407,22 @@ public class UDBExporter
 
             map.Sectors.Add(sector);
 
+            var center = GetCenter(lines);
+
+            if (platform != null)
+            {
+                //sound seq 0
+                map.Things.Add(new UdbThing
+                {
+                    X = center.X,
+                    Y = center.Y,
+                    Angle = 0,
+                    Type = 1400,
+                });
+            }
+
             if (lightSwitchMapInfos.ContainsKey(index))
             {
-                var center = GetCenter(lines);
                 map.Things.Add(new UdbThing
                 {
                     X = center.X,
@@ -728,10 +724,11 @@ script ""Light{i}Change"" (int active)
         for (short i = 0; i < level.Platforms.Count; i++)
         {
             var platform = level.Platforms[i];
-            var polygon = level.Polygons[platform.PolygonIndex];
+            var platformId = platform.PolygonIndex;
+            var polygon = level.Polygons[platformId];
             if (platform == null) continue;
 
-            var hasAdjacentPlatforms = adjacentPlatforms.TryGetValue(platform.PolygonIndex, out var adjacentPlatformIndexes);
+            var hasAdjacentPlatforms = adjacentPlatforms.TryGetValue(platformId, out var adjacentPlatformIndexes);
             var triggerAdjacent = platform.ActivatesAdjacantPlatformsAtEachLevel
                 || platform.ActivatesAdjacentPlatformsWhenActivating
                 || platform.ActivatesAdjacentPlatformsWhenDeactivating
@@ -739,18 +736,83 @@ script ""Light{i}Change"" (int active)
                 || platform.DeactivatesAtInitialLevel
                 || platform.DeactivatesAdjacentPlatformsWhenActivating
                 || platform.DeactivatesAdjacentPlatformsWhenDeactivating;
-            //{ (platform.DeactivatesAtEachLevel ? "DeactivatesAtEachLevel" : string.Empty)}
-            //{ (platform.DeactivatesAtInitialLevel ? "DeactivatesAtInitialLevel" : string.Empty)}
             acsWriter.WriteLine($@"
 
-//Platform {platform.PolygonIndex}
-{(adjacentPlatformIndexes != null && triggerAdjacent ? ("//Adjacent platforms: " + string.Join(", ", adjacentPlatformIndexes)) : string.Empty)}
-{(platform.ActivatesAdjacantPlatformsAtEachLevel ? "//ActivatesAdjacantPlatformsAtEachLevel" : string.Empty)}
-{(platform.ActivatesAdjacentPlatformsWhenActivating ? "//ActivatesAdjacentPlatformsWhenActivating" : string.Empty)}
-{(platform.ActivatesAdjacentPlatformsWhenDeactivating ? "//ActivatesAdjacentPlatformsWhenDeactivating" : string.Empty)}
-{(platform.DeactivatesAdjacentPlatformsWhenActivating ? "//DeactivatesAdjacentPlatformsWhenActivating" : string.Empty)}
-{(platform.DeactivatesAdjacentPlatformsWhenDeactivating ? "//DeactivatesAdjacentPlatformsWhenDeactivating" : string.Empty)}
-{(platform.ActivatesLight ? "//Activate light " + polygon.FloorLight : string.Empty)}
+//Platform {platformId}
+
+bool platform{platformId}On = {platform.InitiallyActive.ToString().ToLower()};
+bool platform{platformId}Extended = {platform.InitiallyExtended.ToString().ToLower()};
+bool platform{platformId}Moving = false;
+
+script ""Platform{platformId}Switch"" (int tagId, int soundTagId)
+{{
+    if(!platform{platformId}Moving) {{
+        platform{platformId}On = !platform{platformId}On;
+        platform{platformId}Moving = true;
+	    toggleSwitch(tagId, soundTagId, platform{platformId}On);
+
+        ACS_NamedExecute(""Platform{platformId}Loop"", 0);
+    }}
+}}
+
+script ""Platform{platformId}Activate"" (void)
+{{
+    if(!platform{platformId}Moving && !platform{platformId}Extended) {{
+        platform{platformId}On = true;
+        platform{platformId}Moving = true;
+        ACS_NamedExecute(""Platform{platformId}Loop"", 0);
+    }}
+}}
+
+script ""Platform{platformId}Deactivate"" (void)
+{{
+    if(!platform{platformId}Moving && platform{platformId}Extended) {{
+        platform{platformId}On = false;
+        platform{platformId}Moving = true;
+        ACS_NamedExecute(""Platform{platformId}Loop"", 0);
+    }}
+}}
+
+script ""Platform{platformId}Loop"" (void)
+{{
+    {(platform.DelaysBeforeActivation ? $"//Delay" : string.Empty)}
+{(platform.ActivatesLight ? $@"if(!light{polygon.FloorLight}On) 
+		{{
+			ACS_NamedExecute(""Light{polygon.FloorLight}Switch"", 0);
+		}}
+" : string.Empty)}
+    if(!platform{platformId}Extended) {{
+        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenActivating, true, adjacentPlatformIndexes)}
+        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenActivating, false, adjacentPlatformIndexes)}
+		Floor_MoveToValue({platformId}, {FormatPlatformSpeed(platform.Speed)}, {Math.Abs(ConvertUnit(platform.MaximumHeight, 0))}, {(platform.MaximumHeight < 0).ToString().ToLower()});
+		TagWait({platformId});
+        platform{platformId}Moving = false;
+        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenDeactivating, true, adjacentPlatformIndexes)}
+        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenDeactivating, false, adjacentPlatformIndexes)}
+		Delay({FormatTicks(platform.Delay)});
+    }}
+    else {{
+        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenActivating, true, adjacentPlatformIndexes)}
+        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenActivating, false, adjacentPlatformIndexes)}
+		Floor_MoveToValue({platformId}, {FormatPlatformSpeed(platform.Speed)}, {Math.Abs(ConvertUnit(platform.MinimumHeight, 0))}, {platform.MinimumHeight.ToString().ToLower()});
+		TagWait({platformId});
+        platform{platformId}Moving = false;
+        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenDeactivating, true, adjacentPlatformIndexes)}
+        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenDeactivating, false, adjacentPlatformIndexes)}
+		Delay({FormatTicks(platform.Delay)});
+    }}
+    {GetPlatformActivationScripts(platform.ActivatesAdjacantPlatformsAtEachLevel, true, adjacentPlatformIndexes)}
+}}
+
+script ""Platform{platformId}Stop"" (void)
+{{
+	if(platform{platformId}On) {{
+		platform{platformId}On = false;
+
+		toggleSwitch(34, 35, false);
+	}}
+}}
+
 ");
         }
 
@@ -824,6 +886,16 @@ function int abs (int x)
 }}");
     }
 
+    private string GetPlatformActivationScripts(bool enabled, bool activate, IEnumerable<int>? platformIds)
+    {
+        if (!enabled || platformIds == null || !platformIds.Any())
+        {
+            return string.Empty;
+        }
+
+        return string.Join("\n", platformIds.Select(e => $@"ACS_NamedExecute(""Platform{e}{(activate ? "Activate" : "Deactivate")}"", 0);"));
+    }
+
     private void SetSwitchTexture(UdbTexture middle, bool active)
     {
         if (!middle.Name.Contains("SET00") && !middle.Name.Contains("SET01"))
@@ -842,13 +914,13 @@ function int abs (int x)
 
     private (double X, double Y) GetCenter(List<UdbLine> vertices)
     {
-        int n = vertices.Count;
+        var n = vertices.Count;
         double area = 0, cx = 0, cy = 0;
 
-        for (int i = 0; i < n; i++)
+        for (var i = 0; i < n; i++)
         {
-            int j = (i + 1) % n; // Next vertex (wraps around)
-            double crossProduct = vertices[i].Start.X * vertices[j].Start.Y - vertices[j].Start.X * vertices[i].Start.Y;
+            var j = (i + 1) % n; // Next vertex (wraps around)
+            var crossProduct = (vertices[i].Start.X * vertices[j].Start.Y) - (vertices[j].Start.X * vertices[i].Start.Y);
 
             area += crossProduct;
             cx += (vertices[i].Start.X + vertices[j].Start.X) * crossProduct;
@@ -856,8 +928,8 @@ function int abs (int x)
         }
 
         area *= 0.5;
-        cx /= (6 * area);
-        cy /= (6 * area);
+        cx /= 6 * area;
+        cy /= 6 * area;
 
         return (cx, cy);
     }
@@ -1094,7 +1166,7 @@ function int abs (int x)
 
     private bool GetSky(short transferMode)
     {
-        return (transferMode == 9);
+        return transferMode == 9;
     }
 
     private UdbPlatform? GetUdbPlatform(Platform? platform)
@@ -1115,7 +1187,7 @@ function int abs (int x)
             IsExtended = platform.InitiallyExtended,
             IsLocked = platform.IsLocked,
             IsPlayerControl = platform.IsPlayerControllable,
-            IsMonsterControl = (platform.IsMonsterControllable),
+            IsMonsterControl = platform.IsMonsterControllable,
         };
     }
 
@@ -1145,7 +1217,7 @@ function int abs (int x)
             texId--;
         }
 
-        return $"{(env)}SET{texId.ToString("00")}";
+        return $"{env}SET{texId.ToString("00")}";
     }
 
     private short FormatIntensity(double intensity, bool includeMin = true)
@@ -1153,15 +1225,23 @@ function int abs (int x)
         return (short)((intensity * 155) + (includeMin ? 100 : 0));
     }
 
+    private int FormatPlatformSpeed(short speed)
+    {
+        //ok so the theory is
+        // - marathon speed = world units per second (30 ticks)
+        //doom speed = world units 64 per sec (35 ticks) x 8 for some magical reason
+        // its almost x/2 
+        return (int)Math.Round((double)speed / 30 * 64 / 35 * 8);
+    }
+
     private short FormatTicks(double marathonTicks)
     {
         return (short)((double)marathonTicks / 30 * 35);
     }
 
-
-    private double ConvertUnit(short val)
+    private double ConvertUnit(short val, int decimalPlaces = 3)
     {
-        return Math.Round(World.ToDouble(val) * Scale, 3);
+        return Math.Round(World.ToDouble(val) * Scale, decimalPlaces);
     }
 }
 
