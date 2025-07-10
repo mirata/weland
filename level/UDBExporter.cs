@@ -268,6 +268,10 @@ public class UDBExporter
                     //    floorHeight = platform.MaximumHeight;
                     //}
                 }
+                if (platform.ActivatesLight)
+                {
+                    activatedLights.Add(p.FloorLight);
+                }
             }
 
             List<UdbLine> lines = [];
@@ -411,14 +415,38 @@ public class UDBExporter
 
             if (platform != null)
             {
-                //sound seq 0
-                map.Things.Add(new UdbThing
+                if (platform.IsDoor)
                 {
-                    X = center.X,
-                    Y = center.Y,
-                    Angle = 0,
-                    Type = 1400,
-                });
+
+                    //sound seq 0
+                    map.Things.Add(new UdbThing
+                    {
+                        X = center.X,
+                        Y = center.Y,
+                        Angle = 0,
+                        Type = 1402, //no sound
+                    });
+                    //map marker
+                    map.Things.Add(new UdbThing
+                    {
+                        X = center.X + 1,
+                        Y = center.Y + 1,
+                        Angle = 0,
+                        Type = 9001, //map spot
+                        TagId = 2000 + platform.PolygonIndex
+                    });
+                }
+                else
+                {
+                    //sound seq 0
+                    map.Things.Add(new UdbThing
+                    {
+                        X = center.X,
+                        Y = center.Y,
+                        Angle = 0,
+                        Type = 1400, //plat 1
+                    });
+                }
             }
 
             if (lightSwitchMapInfos.ContainsKey(index))
@@ -466,40 +494,35 @@ const lineMatch = (line1, line2, tolerance = 0.001) => {{
 }};
 
 const allSectorLines = [];
-const allSectorTags = [];
+const allSectors = [];
 
-const drawSector = async (sector, debug = false) => {{
-  UDB.Map.drawLines([new UDB.Vector2D(sector.lines[0].start.x, sector.lines[0].start.y), ...sector.lines.map((l) => new UDB.Vector2D(l.end.x, l.end.y))]);
+const drawSector = async (polygon, debug = false) => {{
+  UDB.Map.drawLines([new UDB.Vector2D(polygon.lines[0].start.x, polygon.lines[0].start.y), ...polygon.lines.map((l) => new UDB.Vector2D(l.end.x, l.end.y))]);
 
   let sectors = UDB.Map.getMarkedSectors();
-  for (let s of sectors) {{
-    s.tag = null;
-    if (sector.platform) {{
-      allSectorTags.push({{ sector: s, tagId: sector.index }});
-    }}
-    if (sector.lightSectorTagId) {{
-      allSectorTags.push({{ sector: s, tagId: sector.lightSectorTagId }});
-    }}
-    s.fields.rotationfloor = 90;
-    s.fields.rotationceiling = 90;
+  for (let sector of sectors) {{
+    sector.tag = null;
+    allSectors.push({{ sector, polygon }});
+    sector.fields.rotationfloor = 90;
+    sector.fields.rotationceiling = 90;
     // lightceilingabsolute = true;
     // lightceiling = 150;
     // lightfloor = 32;
-    s.floorHeight = sector.floorHeight;
-    s.ceilingHeight = sector.ceilingHeight;
-    s.floorTexture = sector.floorTexture.sky ? ""F_SKY1"" : sector.floorTexture.name;
-    s.ceilingTexture = sector.ceilingTexture.sky ? ""F_SKY1"" : sector.ceilingTexture.name;
-    s.brightness = getBrightness(sector.floorTexture.lightIndex);
-    if (sector.ceilingTexture.lightIndex !== sector.floorTexture.lightIndex) {{
-      s.fields.lightceilingabsolute = true;
-      s.fields.lightceiling = getBrightness(sector.ceilingTexture.lightIndex);
+    sector.floorHeight = polygon.floorHeight;
+    sector.ceilingHeight = polygon.ceilingHeight;
+    sector.floorTexture = polygon.floorTexture.sky ? ""F_SKY1"" : polygon.floorTexture.name;
+    sector.ceilingTexture = polygon.ceilingTexture.sky ? ""F_SKY1"" : polygon.ceilingTexture.name;
+    sector.brightness = getBrightness(polygon.floorTexture.lightIndex);
+    if (polygon.ceilingTexture.lightIndex !== polygon.floorTexture.lightIndex) {{
+      sector.fields.lightceilingabsolute = true;
+      sector.fields.lightceiling = getBrightness(polygon.ceilingTexture.lightIndex);
     }} else {{
-      s.fields.lightceilingabsolute = false;
-      s.fields.lightceiling = 0;
+      sector.fields.lightceilingabsolute = false;
+      sector.fields.lightceiling = 0;
     }}
 
-    for (let l of s.getSidedefs()) {{
-      const sectorLine = sector.lines.find((x) => {{
+    for (let l of sector.getSidedefs()) {{
+      const sectorLine = polygon.lines.find((x) => {{
         // UDB.showMessage(`[${{x.start.x}}, ${{x.start.y}}] - [${{x.end.x}}, ${{x.end.y}}], [${{l.line.line.v1.x}}, ${{l.line.line.v1.y}}] - [${{l.line.line.v2.x}}, ${{l.line.line.v2.y}}]`);
         return lineMatch([x.start, x.end], [l.line.line.v1, l.line.line.v2]);
       }});
@@ -516,12 +539,12 @@ const drawSector = async (sector, debug = false) => {{
         l.line.args[2] = 1000 + sectorLine.triggerLightIndex;
         l.line.args[3] = 2000 + sectorLine.triggerLightIndex;
       }}
-      allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector }});
+      allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector: polygon }});
     }}
   }}
   count++;
-  if (count % 50 === 0) {{
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+  if (count % 25 === 0) {{
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }}
 }};
 
@@ -593,11 +616,26 @@ const applySideTextures = () => {{
   }}
 }};
 
-const applyTags = () => {{
-  for (const st of allSectorTags) {{
-    const {{ sector, tagId }} = st;
+const applySectorChanges = () => {{
+  for (const st of allSectors) {{
+    const {{ sector, polygon }} = st;
+    if (polygon.platform) {{
+      sector.addTag(polygon.index);
+    }}
+    if (polygon.lightSectorTagId) {{
+      sector.addTag(polygon.lightSectorTagId);
+    }}
 
-    sector.addTag(tagId);
+    if (polygon.platform?.isDoor) {{
+      sector.getSidedefs().forEach((sidedef) => {{
+        if (sidedef.line.front && sidedef.line.back) {{
+          sidedef.line.action = 80;
+          sidedef.line.flags.repeatspecial = true;
+          sidedef.line.flags.playeruse = true;
+          sidedef.line.fields.arg0str = polygon.platform.touchScript;
+        }}
+      }});
+    }}
   }}
 }};
 
@@ -616,7 +654,7 @@ const create = async () => {{
   }}
 
   applySideTextures();
-  applyTags();
+  applySectorChanges();
 }};
 
 create().then();
@@ -643,7 +681,7 @@ Script ""InitialiseLighting"" ENTER
         }
         acsWriter.WriteLine($@"}}
 ");
-        foreach (var i in controlledLightIndexes)
+        foreach (var i in controlledLightIndexes.OrderBy(x => x))
         {
             var light = level.Lights[i];
             var tagId = 500 + i;
@@ -736,7 +774,26 @@ script ""Light{i}Change"" (int active)
                 || platform.DeactivatesAtInitialLevel
                 || platform.DeactivatesAdjacentPlatformsWhenActivating
                 || platform.DeactivatesAdjacentPlatformsWhenDeactivating;
-            acsWriter.WriteLine($@"
+
+            if (platform.IsDoor)
+            {
+                acsWriter.WriteLine($@"
+int door{platformId}State = 0;
+
+script ""Door{platformId}Touch"" (void){{
+	door129State = doorTrigger(door{platformId}State, {1000 + platformId});
+}}
+
+script ""GenericDoorLoop"" ENTER
+{{
+	door129State = doorCeilingLoop(door{platformId}State, {platformId}, {1000 + platformId}, {ConvertUnit(platform.MinimumHeight, 0)} {ConvertUnit(platform.MaximumHeight, 0)}, {FormatPlatformSpeed(platform.Speed)}, {FormatTicks(platform.Delay)});
+	if(door{platformId}State > 0) Delay(8); else Delay(1);
+	Restart;
+}}");
+            }
+            else
+            {
+                acsWriter.WriteLine($@"
 
 //Platform {platformId}
 
@@ -814,6 +871,7 @@ script ""Platform{platformId}Stop"" (void)
 }}
 
 ");
+            }
         }
 
         acsWriter.WriteLine($@"
@@ -827,6 +885,49 @@ function void toggleSwitch(int tagId, int soundTagId, bool active) {{
 		PlaySound(soundTagId, ""MSWOFF"");
 	}}
 }}
+
+
+
+
+function int doorTrigger (int state, int soundTagId)
+{{
+	if(state == 0){{
+		state = -1; //open
+	}} else{{
+		state = 0; //close
+	}}
+	if(state == -1){{
+		PlaySound(soundTagId, ""MDRUP"");
+	}}
+	else{{
+
+		PlaySound(soundTagId, ""MDRDOWN"");
+	}}
+	return state;
+}}
+
+function int doorCeilingLoop(int state, int tagId, int soundTagId, int minHeight, int maxHeight, int speed, int openDelay)
+{{
+	int height = GetSectorCeilingZ(tagId, 0, 0);
+
+	if(state == -1 && height < maxHeight) {{
+		Ceiling_RaiseByValue(tagId, speed, 8);
+	}}
+	else if(state == 0 && height > minHeight){{
+		Ceiling_LowerByValue(tagId, speed, 8);
+	}}
+
+	if(state != 0 && height >= maxHeight){{
+		if(state == -1) state = 0;
+		state += 8;
+		if(state > openDelay){{
+			state = 0;
+			PlaySound(soundTagId, ""MDRDOWN"");
+		}}
+	}}
+	return state;
+}}
+
 
 function int lightFn(int fn, int phase, int intensity, int intensityDelta, int currentIntensity, int ticks)
 {{
@@ -1188,6 +1289,7 @@ function int abs (int x)
             IsLocked = platform.IsLocked,
             IsPlayerControl = platform.IsPlayerControllable,
             IsMonsterControl = platform.IsMonsterControllable,
+            TouchScript = platform.IsDoor ? $"Door{platform.PolygonIndex}Touch" : null
         };
     }
 
@@ -1299,6 +1401,7 @@ public class UdbPlatform
     public bool IsLocked { get; set; }
     public bool IsPlayerControl { get; set; }
     public bool IsMonsterControl { get; set; }
+    public string? TouchScript { get; set; }
 }
 
 public class UdbLine
