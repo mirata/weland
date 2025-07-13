@@ -250,18 +250,18 @@ public class UDBExporter
                 {
                     if (platform.InitiallyExtended)
                     {
-                        ceilingHeight = platform.MinimumHeight;
+                        ceilingHeight = Math.Max(p.FloorHeight, platform.MinimumHeight);
                     }
                     else if (platform.MinimumHeight < p.CeilingHeight)
                     {
-                        ceilingHeight = platform.MinimumHeight;
+                        ceilingHeight = Math.Max(p.FloorHeight, platform.MinimumHeight);
                     }
                 }
                 if (platform.ComesFromFloor)
                 {
                     if (platform.InitiallyExtended)
                     {
-                        floorHeight = platform.MaximumHeight;
+                        floorHeight = Math.Min(p.CeilingHeight, platform.MaximumHeight);
                     }
                     //else if (platform.MaximumHeight > p.FloorHeight)
                     //{
@@ -319,12 +319,14 @@ public class UDBExporter
                         }
                         else if (side.Type == SideType.High)
                         {
-                            var platformOffset = adjacentPlatform != null ? ConvertUnit(adjacentPlatform.MaximumHeight) - ConvertUnit(adjacentPlatform.MinimumHeight) : 0;
+                            var platformOffset = adjacentPlatform != null ? ConvertUnit(Math.Min(adjacentPolygon.CeilingHeight, adjacentPlatform.MaximumHeight)) - ConvertUnit(Math.Max(adjacentPolygon.FloorHeight, adjacentPlatform.MinimumHeight)) : 0;
                             var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight) + platformOffset;
                             upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
                         }
                         else if (side.Type == SideType.Low)
                         {
+                            var platformOffset = adjacentPlatform != null ? ConvertUnit(Math.Min(adjacentPolygon.CeilingHeight, adjacentPlatform.MaximumHeight)) - ConvertUnit(Math.Max(adjacentPolygon.FloorHeight, adjacentPlatform.MinimumHeight)) : 0;
+                            var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight) - platformOffset;
                             lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode);
                         }
                         else if (side.Type == SideType.Full)
@@ -382,7 +384,8 @@ public class UDBExporter
                     Middle = middle,
                     Lower = lower,
                     IsSolid = adjacentPolygon != null && line.Solid,
-                    TriggerLightIndex = triggerLightIndex
+                    TriggerLightIndex = triggerLightIndex,
+                    TriggerPlatformIndex = triggerPlatformIndex
                 });
             }
 
@@ -412,42 +415,6 @@ public class UDBExporter
             map.Sectors.Add(sector);
 
             var center = GetCenter(lines);
-
-            if (platform != null)
-            {
-                if (platform.IsDoor)
-                {
-
-                    //sound seq 0
-                    map.Things.Add(new UdbThing
-                    {
-                        X = center.X,
-                        Y = center.Y,
-                        Angle = 0,
-                        Type = 1402, //no sound
-                    });
-                    //map marker
-                    map.Things.Add(new UdbThing
-                    {
-                        X = center.X + 1,
-                        Y = center.Y + 1,
-                        Angle = 0,
-                        Type = 9001, //map spot
-                        TagId = 2000 + platform.PolygonIndex
-                    });
-                }
-                else
-                {
-                    //sound seq 0
-                    map.Things.Add(new UdbThing
-                    {
-                        X = center.X,
-                        Y = center.Y,
-                        Angle = 0,
-                        Type = 1400, //plat 1
-                    });
-                }
-            }
 
             if (lightSwitchMapInfos.ContainsKey(index))
             {
@@ -534,18 +501,26 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.action = 80;
         l.line.flags.repeatspecial = true;
         l.line.flags.playeruse = true;
-        l.line.fields.arg0str = `Light${{sectorLine.triggerLightIndex}}Switch`;
-        l.line.tag = 1000 + sectorLine.triggerLightIndex;
-        l.line.args[2] = 1000 + sectorLine.triggerLightIndex;
-        l.line.args[3] = 2000 + sectorLine.triggerLightIndex;
+        l.line.flags.impact = true;
+        l.line.fields.arg0str = `Light${{sectorLine.triggerLightIndex}}Toggle`;
+        l.line.tag = 1500 + sectorLine.triggerLightIndex;
+      }}
+
+      if (sectorLine.triggerPlatformIndex) {{
+        l.line.action = 80;
+        l.line.flags.repeatspecial = true;
+        l.line.flags.playeruse = true;
+        l.line.flags.impact = true;
+        l.line.fields.arg0str = `Platform${{sectorLine.triggerPlatformIndex}}Toggle`;
+        l.line.tag = 1000 + sectorLine.triggerPlatformIndex;
       }}
       allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector: polygon }});
     }}
   }}
   count++;
-  if (count % 25 === 0) {{
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }}
+  //if (count % 25 === 0) {{
+    //await new Promise((resolve) => setTimeout(resolve, 10));
+  //}}
 }};
 
 const addThing = (thing) => {{
@@ -620,6 +595,13 @@ const applySectorChanges = () => {{
   for (const st of allSectors) {{
     const {{ sector, polygon }} = st;
     if (polygon.platform) {{
+      // ensure all linedefs are pointed out
+      sector.getSidedefs().forEach((sidedef) => {{
+        const line = sidedef.line;
+        if(line.front?.sector !== null && line.back?.sector !== null && line.front.sector.index === sector.index){{
+          line.flip();
+        }}
+      }});
       sector.addTag(polygon.index);
     }}
     if (polygon.lightSectorTagId) {{
@@ -644,7 +626,7 @@ const level = {JsonSerializer.Serialize(map, options)};
 
 const create = async () => {{
   for (const sector of level.sectors) {{
-    drawSector(sector);
+    await drawSector(sector);
   }}
 
   for (const thing of level.things) {{
@@ -667,17 +649,17 @@ create().then();
 
 Script ""InitialiseLighting"" ENTER
 {{");
-        foreach (var i in initialisedLights)
+        for (var i = 0; i < level.Lights.Count; i++)
         {
             var light = level.Lights[i];
-            if (light.InitiallyActive)
-            {
-                acsWriter.WriteLine($@" ACS_NamedExecute(""Light{i}Active"", 0);");
-            }
-            else
-            {
-                acsWriter.WriteLine($@" ACS_NamedExecute(""Light{i}Inactive"", 0);");
-            }
+            acsWriter.WriteLine($@"     ScriptCall(""Light"", ""Init"", {i + 500}, {i + 1500}, {light.InitiallyActive.ToString().ToLower()},
+        {FormatLightFn(light.PrimaryActive)},
+        {FormatLightFn(light.SecondaryActive)},
+        {FormatLightFn(light.PrimaryInactive)},
+        {FormatLightFn(light.SecondaryInactive)},
+        {FormatLightFn(light.BecomingActive)},
+        {FormatLightFn(light.BecomingInactive)});
+");
         }
         acsWriter.WriteLine($@"}}
 ");
@@ -685,79 +667,17 @@ Script ""InitialiseLighting"" ENTER
         {
             var light = level.Lights[i];
             var tagId = 500 + i;
-            acsWriter.WriteLine($@"
-
-//----------- Light {i} -------------
-bool light{i}On = {light.InitiallyActive.ToString().ToLower()};
-
-script ""Light{i}Switch"" (int tagId, int soundTagId)
+            acsWriter.WriteLine($@"script ""Light{i}Toggle"" (void)
 {{
-	ACS_NamedTerminate(""Light{i}Active"", 0);
-	ACS_NamedTerminate(""Light{i}Inactive"", 0);
-	ACS_NamedTerminate(""Light{i}Change"", 0);
-	Delay(1);
-	light{i}On = !light{i}On;
-	toggleSwitch(tagId, soundTagId, light{i}On);
-
-	if(light{i}On)
-	{{
-		ACS_NamedExecute(""Light{i}Change"", 0, 1);
-	}}
-	else
-	{{
-		ACS_NamedExecute(""Light{i}Change"", 0, 0);
-	}}
+	ScriptCall(""Light"", ""Toggle"", {i + 500});
 }}
-
-script ""Light{i}Active"" (void)
-{{
-	int period;
-	int lightVal;
-
-	int ticks = 0;
-	int initial;
-	while(true)
-	{{
-		{FormatLightFn(tagId, light.PrimaryActive)}
-		{FormatLightFn(tagId, light.SecondaryActive)}
-	}}
-}}
-
-script ""Light{i}Inactive"" (void)
-{{
-	int period;
-	int lightVal;
-
-	int ticks = 0;
-	int initial;
-	while(true)
-	{{
-		{FormatLightFn(tagId, light.PrimaryInactive)}
-		{FormatLightFn(tagId, light.SecondaryInactive)}
-	}}
-}}
-
-script ""Light{i}Change"" (int active)
-{{
-	int period;
-	int lightVal;
-
-	int ticks = 0;
-	int initial;
-	if(active == 1)
-	{{
-		{FormatLightFn(tagId, light.BecomingActive)}
-		ACS_NamedExecute(""Light{i}Active"", 0, 0);
-	}}
-	else
-	{{
-		{FormatLightFn(tagId, light.BecomingInactive)}
-		ACS_NamedExecute(""Light{i}Inactive"", 0, 0);
-	}}
-}}
-
 ");
         }
+
+        acsWriter.WriteLine($@"Script ""InitialisePlatforms"" ENTER
+{{");
+
+        var adjacentPlatformRules = "";
 
         for (short i = 0; i < level.Platforms.Count; i++)
         {
@@ -770,231 +690,42 @@ script ""Light{i}Change"" (int active)
             var triggerAdjacent = platform.ActivatesAdjacantPlatformsAtEachLevel
                 || platform.ActivatesAdjacentPlatformsWhenActivating
                 || platform.ActivatesAdjacentPlatformsWhenDeactivating
-                || platform.DeactivatesAtEachLevel
-                || platform.DeactivatesAtInitialLevel
                 || platform.DeactivatesAdjacentPlatformsWhenActivating
                 || platform.DeactivatesAdjacentPlatformsWhenDeactivating;
 
+            acsWriter.WriteLine($@"    ScriptCall(""Platform"", ""Init"", {platformId}, {platformId + 1000}, {ConvertUnit(platform.MinimumHeight, 1):F1}, {ConvertUnit(platform.MaximumHeight, 1):F1}, {FormatPlatformSpeed(platform.Speed):F2},  {FormatTicks(platform.Delay)}, {platform.IsDoor.ToString().ToLower()},
+	 {platform.ComesFromFloor.ToString().ToLower()},  {platform.ComesFromCeiling.ToString().ToLower()},  {platform.ExtendsFloorToCeiling.ToString().ToLower()},  {platform.InitiallyExtended.ToString().ToLower()},  {platform.InitiallyActive.ToString().ToLower()},
+	 {platform.ActivatesOnlyOnce.ToString().ToLower()},  {platform.DeactivatesAtEachLevel.ToString().ToLower()}, {platform.DeactivatesAtInitialLevel.ToString().ToLower()}, {platform.DelaysBeforeActivation.ToString().ToLower()}, {(platform.ActivatesLight ? polygon.FloorLight + 500 : -1)}, {(platform.DeactivatesLight ? polygon.FloorLight + 500 : -1)}, {platform.IsPlayerControllable.ToString().ToLower()}, {platform.IsMonsterControllable.ToString().ToLower()});
+");
+
+            if (hasAdjacentPlatforms && triggerAdjacent)
+            {
+                adjacentPlatformRules += $@"    ScriptCall(""Platform"", ""SetAdjacentPlatformRules"", {platformId}, {platform.ActivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.ActivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()}, {platform.ActivatesAdjacantPlatformsAtEachLevel.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()});
+";
+            }
+        }
+        acsWriter.WriteLine(adjacentPlatformRules);
+        acsWriter.WriteLine($@"}}
+");
+
+        for (short i = 0; i < level.Platforms.Count; i++)
+        {
+            var platform = level.Platforms[i];
+            var platformId = platform.PolygonIndex;
+            acsWriter.WriteLine($@"script ""Platform{platformId}Toggle"" (void)
+{{
+	ScriptCall(""Platform"", ""Toggle"", {platformId}, GetActorClass(ActivatorTID()));
+}}
+");
             if (platform.IsDoor)
             {
-                acsWriter.WriteLine($@"
-int door{platformId}State = 0;
-
-script ""Door{platformId}Touch"" (void){{
-	door129State = doorTrigger(door{platformId}State, {1000 + platformId});
-}}
-
-script ""GenericDoorLoop"" ENTER
+                acsWriter.WriteLine($@"script ""Door{platformId}Touch"" (void)
 {{
-	door129State = doorCeilingLoop(door{platformId}State, {platformId}, {1000 + platformId}, {ConvertUnit(platform.MinimumHeight, 0)} {ConvertUnit(platform.MaximumHeight, 0)}, {FormatPlatformSpeed(platform.Speed)}, {FormatTicks(platform.Delay)});
-	if(door{platformId}State > 0) Delay(8); else Delay(1);
-	Restart;
-}}");
-            }
-            else
-            {
-                acsWriter.WriteLine($@"
-
-//Platform {platformId}
-
-bool platform{platformId}On = {platform.InitiallyActive.ToString().ToLower()};
-bool platform{platformId}Extended = {platform.InitiallyExtended.ToString().ToLower()};
-bool platform{platformId}Moving = false;
-
-script ""Platform{platformId}Switch"" (int tagId, int soundTagId)
-{{
-    if(!platform{platformId}Moving) {{
-        platform{platformId}On = !platform{platformId}On;
-        platform{platformId}Moving = true;
-	    toggleSwitch(tagId, soundTagId, platform{platformId}On);
-
-        ACS_NamedExecute(""Platform{platformId}Loop"", 0);
-    }}
+	ScriptCall(""Platform"", ""Toggle"", {platformId}, GetActorClass(ActivatorTID()));
 }}
-
-script ""Platform{platformId}Activate"" (void)
-{{
-    if(!platform{platformId}Moving && !platform{platformId}Extended) {{
-        platform{platformId}On = true;
-        platform{platformId}Moving = true;
-        ACS_NamedExecute(""Platform{platformId}Loop"", 0);
-    }}
-}}
-
-script ""Platform{platformId}Deactivate"" (void)
-{{
-    if(!platform{platformId}Moving && platform{platformId}Extended) {{
-        platform{platformId}On = false;
-        platform{platformId}Moving = true;
-        ACS_NamedExecute(""Platform{platformId}Loop"", 0);
-    }}
-}}
-
-script ""Platform{platformId}Loop"" (void)
-{{
-    {(platform.DelaysBeforeActivation ? $"//Delay" : string.Empty)}
-{(platform.ActivatesLight ? $@"if(!light{polygon.FloorLight}On) 
-		{{
-			ACS_NamedExecute(""Light{polygon.FloorLight}Switch"", 0);
-		}}
-" : string.Empty)}
-    if(!platform{platformId}Extended) {{
-        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenActivating, true, adjacentPlatformIndexes)}
-        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenActivating, false, adjacentPlatformIndexes)}
-		Floor_MoveToValue({platformId}, {FormatPlatformSpeed(platform.Speed)}, {Math.Abs(ConvertUnit(platform.MaximumHeight, 0))}, {(platform.MaximumHeight < 0).ToString().ToLower()});
-		TagWait({platformId});
-        platform{platformId}Moving = false;
-        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenDeactivating, true, adjacentPlatformIndexes)}
-        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenDeactivating, false, adjacentPlatformIndexes)}
-		Delay({FormatTicks(platform.Delay)});
-    }}
-    else {{
-        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenActivating, true, adjacentPlatformIndexes)}
-        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenActivating, false, adjacentPlatformIndexes)}
-		Floor_MoveToValue({platformId}, {FormatPlatformSpeed(platform.Speed)}, {Math.Abs(ConvertUnit(platform.MinimumHeight, 0))}, {platform.MinimumHeight.ToString().ToLower()});
-		TagWait({platformId});
-        platform{platformId}Moving = false;
-        {GetPlatformActivationScripts(platform.ActivatesAdjacentPlatformsWhenDeactivating, true, adjacentPlatformIndexes)}
-        {GetPlatformActivationScripts(platform.DeactivatesAdjacentPlatformsWhenDeactivating, false, adjacentPlatformIndexes)}
-		Delay({FormatTicks(platform.Delay)});
-    }}
-    {GetPlatformActivationScripts(platform.ActivatesAdjacantPlatformsAtEachLevel, true, adjacentPlatformIndexes)}
-}}
-
-script ""Platform{platformId}Stop"" (void)
-{{
-	if(platform{platformId}On) {{
-		platform{platformId}On = false;
-
-		toggleSwitch(34, 35, false);
-	}}
-}}
-
 ");
             }
         }
-
-        acsWriter.WriteLine($@"
-function void toggleSwitch(int tagId, int soundTagId, bool active) {{
-	if(active){{
-		SetLineTexture(tagId, SIDE_FRONT, TEXTURE_MIDDLE, ""SWON"");
-		PlaySound(soundTagId, ""MSWON"");
-	}}
-	else {{
-		SetLineTexture(tagId, SIDE_FRONT, TEXTURE_MIDDLE, ""SWOFF"");
-		PlaySound(soundTagId, ""MSWOFF"");
-	}}
-}}
-
-
-
-
-function int doorTrigger (int state, int soundTagId)
-{{
-	if(state == 0){{
-		state = -1; //open
-	}} else{{
-		state = 0; //close
-	}}
-	if(state == -1){{
-		PlaySound(soundTagId, ""MDRUP"");
-	}}
-	else{{
-
-		PlaySound(soundTagId, ""MDRDOWN"");
-	}}
-	return state;
-}}
-
-function int doorCeilingLoop(int state, int tagId, int soundTagId, int minHeight, int maxHeight, int speed, int openDelay)
-{{
-	int height = GetSectorCeilingZ(tagId, 0, 0);
-
-	if(state == -1 && height < maxHeight) {{
-		Ceiling_RaiseByValue(tagId, speed, 8);
-	}}
-	else if(state == 0 && height > minHeight){{
-		Ceiling_LowerByValue(tagId, speed, 8);
-	}}
-
-	if(state != 0 && height >= maxHeight){{
-		if(state == -1) state = 0;
-		state += 8;
-		if(state > openDelay){{
-			state = 0;
-			PlaySound(soundTagId, ""MDRDOWN"");
-		}}
-	}}
-	return state;
-}}
-
-
-function int lightFn(int fn, int phase, int intensity, int intensityDelta, int currentIntensity, int ticks)
-{{
-	int v;
-	switch(fn)
-	{{
-		case 0:
-			v =  intensity * 100;
-			//Print(s:""Constant"", d:v);
-			break;
-		case 1:
-			int linearFrac = (intensity - currentIntensity) * 100 / phase;
-			v = (currentIntensity * 100) + (linearFrac * ticks);
-			if(ticks > phase){{
-				v = intensity * 100;
-			}}
-			//Print(s:""Fade"", d:currentIntensity, s:"" -> "", d:intensity, s:"" - "", d:frac);
-			break;
-		case 2:
-			int smoothFrac = (intensity - currentIntensity) * 100 / phase;
-			v = (currentIntensity * 100) + (smoothFrac * ticks);
-			if(ticks > phase){{
-				v = intensity * 100;
-			}}
-			//Print(s:""Smooth"", d:currentIntensity, s:"" -> "", d:intensity, s:"" - "", d:frac);
-			break;	
-		case 3:
-			int d = Random(-1000, 1000);
-			int flickerFrac = (intensity - currentIntensity) * 100 / phase;
-			v = (currentIntensity * 100) + (flickerFrac * ticks) + d;
-			Print(d:v);
-			if(ticks > phase){{
-				v = intensity * 100;
-			}}
-			if(v > 25500)
-			{{
-				v = 25500;
-			}}
-			else if(v < 15000)
-			{{
-				v = 15000;
-			}}
-			//Print(s:""Smooth"", d:currentIntensity, s:"" -> "", d:intensity, s:"" - "", d:frac);
-			break;
-		default:
-			break;
-	}}
-	return v / 100;
-}}
-
-function int abs (int x)
-{{
-    if (x < 0)
-        return -x;
-
-    return x;
-}}");
-    }
-
-    private string GetPlatformActivationScripts(bool enabled, bool activate, IEnumerable<int>? platformIds)
-    {
-        if (!enabled || platformIds == null || !platformIds.Any())
-        {
-            return string.Empty;
-        }
-
-        return string.Join("\n", platformIds.Select(e => $@"ACS_NamedExecute(""Platform{e}{(activate ? "Activate" : "Deactivate")}"", 0);"));
     }
 
     private void SetSwitchTexture(UdbTexture middle, bool active)
@@ -1035,19 +766,9 @@ function int abs (int x)
         return (cx, cy);
     }
 
-    private string FormatLightFn(int tagId, Light.Function fn)
+    private string FormatLightFn(Light.Function fn)
     {
-        return $@"ticks = 0;
-        initial = GetSectorLightLevel({tagId});
-        period = {FormatTicks(fn.Period)}{(fn.DeltaPeriod > 0 ? $" + Random(-{FormatTicks(fn.DeltaPeriod)}, {FormatTicks(fn.DeltaPeriod)})" : string.Empty)};
-		while(ticks <= period)
-		{{
-			lightVal = lightFn({GetLightFunction(fn)}, period, {FormatIntensity(fn.Intensity)}, {FormatIntensity(fn.DeltaIntensity, false)}, initial, ticks);
-			Light_ChangeToValue({tagId}, lightVal);
-			Delay(1);
-			ticks++;
-		}}
-";
+        return $@"""{fn.LightingFunction.ToString()}"", {FormatTicks(fn.Period)}, {FormatTicks(fn.DeltaPeriod)}, {FormatIntensity(fn.Intensity)}, {FormatIntensity(fn.DeltaIntensity, false)}";
     }
 
     private int GetLightFunction(Light.Function fn)
@@ -1327,13 +1048,13 @@ function int abs (int x)
         return (short)((intensity * 155) + (includeMin ? 100 : 0));
     }
 
-    private int FormatPlatformSpeed(short speed)
+    private double FormatPlatformSpeed(short speed, int decimalPlaces = 2)
     {
         //ok so the theory is
         // - marathon speed = world units per second (30 ticks)
-        //doom speed = world units 64 per sec (35 ticks) x 8 for some magical reason
+        //doom speed = world units 64 per sec (35 ticks)
         // its almost x/2 
-        return (int)Math.Round((double)speed / 30 * 64 / 35 * 8);
+        return Math.Round((double)speed / 30 * 64 / 35, decimalPlaces);
     }
 
     private short FormatTicks(double marathonTicks)
@@ -1413,6 +1134,7 @@ public class UdbLine
     public UdbTexture? Lower { get; set; }
     public bool IsSolid { get; set; }
     public int? TriggerLightIndex { get; set; }
+    public int? TriggerPlatformIndex { get; set; }
 }
 
 public class UdbVector
