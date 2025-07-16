@@ -311,23 +311,35 @@ public class UDBExporter
                 {
                     if (adjacentPolygon != null)
                     {
+                        //doom low textures are anchored to the bottom left of the side - ie if the lower height changes, the texture follows it
+                        //marathon low textures are anchored to the bottom left - if the lower height changes, the texture grows
+                        //however for marathon floor platforms, the offset is relative to the min and max height, and then anchors top left
                         if (side.Type == SideType.Split)
                         {
-                            var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight);
+                            var upperPlatformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight : 0;
+                            var lowerPlatformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight : 0;
+
+                            var fromFloor = adjacentPlatform?.ComesFromFloor ?? false;
+                            var fromCeiling = adjacentPlatform?.ComesFromCeiling ?? false;
+
+                            var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight + (fromCeiling ? upperPlatformOffset : 0);
                             upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
-                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode);
+                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode, fromFloor ? lowerPlatformOffset : 0);
+
+                            //var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight;
+                            //upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
+                            //lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode);
                         }
                         else if (side.Type == SideType.High)
                         {
-                            var platformOffset = adjacentPlatform != null ? ConvertUnit(Math.Min(adjacentPolygon.CeilingHeight, adjacentPlatform.MaximumHeight)) - ConvertUnit(Math.Max(adjacentPolygon.FloorHeight, adjacentPlatform.MinimumHeight)) : 0;
-                            var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight) + platformOffset;
+                            var platformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight : 0;
+                            var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight + platformOffset;
                             upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
                         }
                         else if (side.Type == SideType.Low)
                         {
-                            var platformOffset = adjacentPlatform != null ? ConvertUnit(Math.Min(adjacentPolygon.CeilingHeight, adjacentPlatform.MaximumHeight)) - ConvertUnit(Math.Max(adjacentPolygon.FloorHeight, adjacentPlatform.MinimumHeight)) : 0;
-                            var yOffset = ConvertUnit(p.CeilingHeight) - ConvertUnit(adjacentPolygon.CeilingHeight) - platformOffset;
-                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode);
+                            var platformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight : 0;
+                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, platformOffset);
                         }
                         else if (side.Type == SideType.Full)
                         {
@@ -714,14 +726,14 @@ Script ""InitialiseLighting"" ENTER
             var platformId = platform.PolygonIndex;
             acsWriter.WriteLine($@"script ""Platform{platformId}Toggle"" (void)
 {{
-	ScriptCall(""Platform"", ""Toggle"", {platformId}, GetActorClass(ActivatorTID()));
+	ScriptCall(""Platform"", ""Toggle"", {platformId});
 }}
 ");
             if (platform.IsDoor)
             {
                 acsWriter.WriteLine($@"script ""Door{platformId}Touch"" (void)
 {{
-	ScriptCall(""Platform"", ""Toggle"", {platformId}, GetActorClass(ActivatorTID()));
+	ScriptCall(""Platform"", ""ToggleTouch"", {platformId}, GetActorClass(ActivatorTID()));
 }}
 ");
             }
@@ -933,13 +945,13 @@ Script ""InitialiseLighting"" ENTER
         return null;
     }
 
-    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, double? yOffset = null)
+    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, int? yOffset = null)
     {
         if (texture == null)
         {
             return null;
         }
-        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = Math.Round(ConvertUnit(texture.Value.X)), Y = Math.Round(ConvertUnit(texture.Value.Y) + (yOffset ?? 0)), Sky = GetSky(transferMode), LightIndex = lightSourceIndex };
+        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = Math.Round(ConvertUnit(texture.Value.X)), Y = Math.Round(ConvertUnit((short)(texture.Value.Y + (yOffset ?? 0)))), Sky = GetSky(transferMode), LightIndex = lightSourceIndex };
     }
 
     public UdbLight GetLight(Light light, short index)
