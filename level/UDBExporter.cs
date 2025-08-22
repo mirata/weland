@@ -1,11 +1,14 @@
+using System;
 using System.Text.Json;
+using Cairo;
+using Gdk;
 using static Weland.Side;
 
 namespace Weland;
 
 public class UDBExporter
 {
-    const double Scale = 64.0;
+    const double detachedOffset = 4096.0;
 
     string[] itemNames = {
         "Knife",
@@ -241,6 +244,36 @@ public class UDBExporter
         for (short index = 0; index < level.Polygons.Count; index++)
         {
             var p = level.Polygons[index];
+            switch (p.Type)
+            {
+                case PolygonType.LightOnTrigger:
+                    break;
+                case PolygonType.LightOffTrigger:
+                    break;
+                case PolygonType.PlatformOnTrigger:
+                    break;
+                case PolygonType.PlatformOffTrigger:
+                    break;
+                case PolygonType.Teleporter:
+                    break;
+
+                case PolygonType.ItemImpassable:
+                case PolygonType.MonsterImpassable:
+                case PolygonType.ZoneBorder:
+                case PolygonType.Goal:
+                case PolygonType.VisibleMonsterTrigger:
+                case PolygonType.InvisibleMonsterTrigger:
+                case PolygonType.DualMonsterTrigger:
+                case PolygonType.ItemTrigger:
+                case PolygonType.MustBeExplored:
+                case PolygonType.AutomaticExit:
+                case PolygonType.MinorOuch:
+                case PolygonType.MajorOuch:
+                case PolygonType.Glue:
+                case PolygonType.GlueTrigger:
+                case PolygonType.Superglue:
+                    break;
+            }
             var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
             var floorHeight = p.FloorHeight;
             var ceilingHeight = p.CeilingHeight;
@@ -306,40 +339,40 @@ public class UDBExporter
 
                 int? triggerLightIndex = null;
                 int? triggerPlatformIndex = null;
+                string? controlPanelClassValue = null;
+                int? lineIndex = null;
 
                 if (side != null)
                 {
                     if (adjacentPolygon != null)
                     {
+                        var floorRoundingOffset = CalculateFloorRoundingOffset(p, adjacentPolygon);
+
                         //doom low textures are anchored to the bottom left of the side - ie if the lower height changes, the texture follows it
                         //marathon low textures are anchored to the bottom left - if the lower height changes, the texture grows
                         //however for marathon floor platforms, the offset is relative to the min and max height, and then anchors top left
                         if (side.Type == SideType.Split)
                         {
-                            var upperPlatformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight : 0;
-                            var lowerPlatformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight : 0;
+                            var upperPlatformOffset = adjacentPlatform != null && adjacentPlatform.ComesFromCeiling ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight : 0;
+                            var lowerPlatformOffset = adjacentPlatform != null && adjacentPlatform.ComesFromFloor ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight : 0;
 
                             var fromFloor = adjacentPlatform?.ComesFromFloor ?? false;
                             var fromCeiling = adjacentPlatform?.ComesFromCeiling ?? false;
 
-                            var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight + (fromCeiling ? upperPlatformOffset : 0);
-                            upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
-                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode, fromFloor ? lowerPlatformOffset : 0);
-
-                            //var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight;
-                            //upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
-                            //lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode);
+                            var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight + upperPlatformOffset;
+                            upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)yOffset));
+                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode, fromFloor ? ConvertUnit((short)lowerPlatformOffset) + floorRoundingOffset : floorRoundingOffset, true);
                         }
                         else if (side.Type == SideType.High)
                         {
                             var platformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight : 0;
                             var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight + platformOffset;
-                            upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, yOffset);
+                            upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)yOffset));
                         }
                         else if (side.Type == SideType.Low)
                         {
-                            var platformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight : 0;
-                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, platformOffset);
+                            var platformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight + floorRoundingOffset : floorRoundingOffset;
+                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)platformOffset), true);
                         }
                         else if (side.Type == SideType.Full)
                         {
@@ -353,6 +386,8 @@ public class UDBExporter
 
                     if (side.IsControlPanel)
                     {
+                        lineIndex = side.LineIndex;
+                        controlPanelClassValue = side.ControlPanelClassValue().ToString();
                         var active = false;
                         if (side.IsLightSwitch())
                         {
@@ -397,7 +432,9 @@ public class UDBExporter
                     Lower = lower,
                     IsSolid = adjacentPolygon != null && line.Solid,
                     TriggerLightIndex = triggerLightIndex,
-                    TriggerPlatformIndex = triggerPlatformIndex
+                    TriggerPlatformIndex = triggerPlatformIndex,
+                    ControlPanelClassValue = controlPanelClassValue,
+                    LineIndex = lineIndex
                 });
             }
 
@@ -405,18 +442,18 @@ public class UDBExporter
             {
                 lines.ForEach(l =>
                 {
-                    l.Start.X -= 2048;
-                    l.End.X -= 2048;
-                    l.Start.Y += 2048;
-                    l.End.Y += 2048;
+                    l.Start.X -= detachedOffset;
+                    l.End.X -= detachedOffset;
+                    l.Start.Y += detachedOffset;
+                    l.End.Y += detachedOffset;
                 });
             }
 
             var sector = new UdbSector
             {
                 Index = index,
-                FloorHeight = ConvertUnit(floorHeight),
-                CeilingHeight = ConvertUnit(ceilingHeight),
+                FloorHeight = Math.Round(ConvertUnit(floorHeight)),
+                CeilingHeight = Math.Round(ConvertUnit(ceilingHeight)),
                 FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
                 CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
                 Platform = GetUdbPlatform(platform),
@@ -526,6 +563,39 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.fields.arg0str = `Platform${{sectorLine.triggerPlatformIndex}}Toggle`;
         l.line.tag = 1000 + sectorLine.triggerPlatformIndex;
       }}
+
+
+      if(sectorLine.controlPanelClassValue === ""PatternBuffer"") {{
+        l.line.action = 80;
+        l.line.flags.repeatspecial = true;
+        l.line.flags.playeruse = true;
+        l.line.fields.arg0str = `Save${{sectorLine.lineIndex}}Toggle`;
+        l.line.tag = 2000 + sectorLine.lineIndex;
+      }} 
+
+      if(sectorLine.controlPanelClassValue === ""Oxygen"") {{
+        l.line.action = 80;
+        l.line.flags.repeatspecial = true;
+        l.line.flags.playeruse = true;
+        l.line.fields.arg0str = `Oxygen${{sectorLine.lineIndex}}Toggle`;
+        l.line.tag = 2000 + sectorLine.lineIndex;
+      }}
+
+      if(sectorLine.controlPanelClassValue === ""Shield"" || sectorLine.controlPanelClassValue === ""DoubleShield"" || sectorLine.controlPanelClassValue === ""TripleShield"") {{
+        l.line.action = 80;
+        l.line.flags.repeatspecial = true;
+        l.line.flags.playeruse = true;
+        l.line.fields.arg0str = `Shield${{sectorLine.lineIndex}}Toggle`;
+        l.line.tag = 2000 + sectorLine.lineIndex;
+      }}
+
+      if(sectorLine.controlPanelClassValue === ""Terminal"") {{
+        l.line.action = 80;
+        l.line.flags.repeatspecial = true;
+        l.line.flags.playeruse = true;
+        l.line.fields.arg0str = `Terminal${{sectorLine.lineIndex}}Toggle`;
+        l.line.tag = 2000 + sectorLine.lineIndex;
+      }}
       allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector: polygon }});
     }}
   }}
@@ -607,13 +677,6 @@ const applySectorChanges = () => {{
   for (const st of allSectors) {{
     const {{ sector, polygon }} = st;
     if (polygon.platform) {{
-      // ensure all linedefs are pointed out
-      sector.getSidedefs().forEach((sidedef) => {{
-        const line = sidedef.line;
-        if(line.front?.sector !== null && line.back?.sector !== null && line.front.sector.index === sector.index){{
-          line.flip();
-        }}
-      }});
       sector.addTag(polygon.index);
     }}
     if (polygon.lightSectorTagId) {{
@@ -622,11 +685,15 @@ const applySectorChanges = () => {{
 
     if (polygon.platform?.isDoor) {{
       sector.getSidedefs().forEach((sidedef) => {{
-        if (sidedef.line.front && sidedef.line.back) {{
-          sidedef.line.action = 80;
-          sidedef.line.flags.repeatspecial = true;
-          sidedef.line.flags.playeruse = true;
-          sidedef.line.fields.arg0str = polygon.platform.touchScript;
+        const line = sidedef.line;
+        if(line.front?.sector && line.back?.sector?.index !== sector.index){{
+          line.flip();
+        }}
+        if (line.front && sidedef.line.back) {{
+          line.action = 80;
+          line.flags.repeatspecial = true;
+          line.flags.playeruse = true;
+          line.fields.arg0str = polygon.platform.touchScript;
         }}
       }});
     }}
@@ -705,18 +772,69 @@ Script ""InitialiseLighting"" ENTER
                 || platform.DeactivatesAdjacentPlatformsWhenActivating
                 || platform.DeactivatesAdjacentPlatformsWhenDeactivating;
 
-            acsWriter.WriteLine($@"    ScriptCall(""Platform"", ""Init"", {platformId}, {platformId + 1000}, {ConvertUnit(platform.MinimumHeight, 1):F1}, {ConvertUnit(platform.MaximumHeight, 1):F1}, {FormatPlatformSpeed(platform.Speed):F2},  {FormatTicks(platform.Delay)}, {platform.IsDoor.ToString().ToLower()},
-	 {platform.ComesFromFloor.ToString().ToLower()},  {platform.ComesFromCeiling.ToString().ToLower()},  {platform.ExtendsFloorToCeiling.ToString().ToLower()},  {platform.InitiallyExtended.ToString().ToLower()},  {platform.InitiallyActive.ToString().ToLower()},
+            acsWriter.WriteLine($@"    ScriptCall(""Platform"", ""Init"", {platformId}, {platformId + 1000}, ""{platform.Type}"", {ConvertUnit(platform.MinimumHeight, 1):F1}, {ConvertUnit(platform.MaximumHeight, 1):F1}, {FormatPlatformSpeed(platform.Speed):F2},  {FormatTicks(platform.Delay)}, {platform.IsDoor.ToString().ToLower()},
+	 {platform.ComesFromFloor.ToString().ToLower()},  {platform.ComesFromCeiling.ToString().ToLower()},  {platform.ExtendsFloorToCeiling.ToString().ToLower()},  {platform.InitiallyExtended.ToString().ToLower()},  {platform.InitiallyActive.ToString().ToLower()}, {platform.ContractsSlower.ToString().ToLower()}, {platform.CannotBeExternallyDeactivated.ToString().ToLower()}, {platform.CausesDamage.ToString().ToLower()}, {platform.ReversesDirectionWhenObstructed.ToString().ToLower()},
 	 {platform.ActivatesOnlyOnce.ToString().ToLower()},  {platform.DeactivatesAtEachLevel.ToString().ToLower()}, {platform.DeactivatesAtInitialLevel.ToString().ToLower()}, {platform.DelaysBeforeActivation.ToString().ToLower()}, {(platform.ActivatesLight ? polygon.FloorLight + 500 : -1)}, {(platform.DeactivatesLight ? polygon.FloorLight + 500 : -1)}, {platform.IsPlayerControllable.ToString().ToLower()}, {platform.IsMonsterControllable.ToString().ToLower()});
 ");
 
             if (hasAdjacentPlatforms && triggerAdjacent)
             {
-                adjacentPlatformRules += $@"    ScriptCall(""Platform"", ""SetAdjacentPlatformRules"", {platformId}, {platform.ActivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.ActivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()}, {platform.ActivatesAdjacantPlatformsAtEachLevel.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()});
+                adjacentPlatformRules += $@"    ScriptCall(""Platform"", ""SetAdjacentPlatformRules"", {platformId}, {platform.ActivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.ActivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()}, {platform.ActivatesAdjacantPlatformsAtEachLevel.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()}, {platform.DoesNotActivateParent.ToString().ToLower()});
 ";
             }
         }
         acsWriter.WriteLine(adjacentPlatformRules);
+        acsWriter.WriteLine($@"}}
+");
+
+        acsWriter.WriteLine($@"Script ""InitialisePolygonTypes"" ENTER
+{{");
+
+        for (short i = 0; i < level.Polygons.Count; i++)
+        {
+            var p = level.Polygons[i];
+            switch (p.Type)
+            {
+                case PolygonType.LightOnTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""LightActivate"", {p.Permutation + 500});
+");
+                    break;
+                case PolygonType.LightOffTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""LightDeactivate"", {p.Permutation + 500});
+");
+                    break;
+                case PolygonType.PlatformOnTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""PlatformActivate"", {p.Permutation});
+");
+                    break;
+                case PolygonType.PlatformOffTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""PlatformDeactivate"", {p.Permutation});
+");
+                    break;
+                case PolygonType.Teleporter:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""Teleport"", {p.Permutation});
+");
+                    break;
+
+                case PolygonType.ItemImpassable:
+                case PolygonType.MonsterImpassable:
+                case PolygonType.ZoneBorder:
+                case PolygonType.Goal:
+                case PolygonType.VisibleMonsterTrigger:
+                case PolygonType.InvisibleMonsterTrigger:
+                case PolygonType.DualMonsterTrigger:
+                case PolygonType.ItemTrigger:
+                case PolygonType.MustBeExplored:
+                case PolygonType.AutomaticExit:
+                case PolygonType.MinorOuch:
+                case PolygonType.MajorOuch:
+                case PolygonType.Glue:
+                case PolygonType.GlueTrigger:
+                case PolygonType.Superglue:
+                    break;
+            }
+        }
+
         acsWriter.WriteLine($@"}}
 ");
 
@@ -738,6 +856,14 @@ Script ""InitialiseLighting"" ENTER
 ");
             }
         }
+    }
+
+    private double CalculateFloorRoundingOffset(Polygon p, Polygon adjacentPolygon)
+    {
+        var a = ConvertUnit(adjacentPolygon.FloorHeight, null);
+        var b = ConvertUnit(p.FloorHeight, null);
+
+        return a - b - (Math.Round(a) - Math.Round(b));
     }
 
     private void SetSwitchTexture(UdbTexture middle, bool active)
@@ -817,8 +943,8 @@ Script ""InitialiseLighting"" ENTER
 
         if (Level.DetachedPolygonIndexes.Contains(obj.PolygonIndex))
         {
-            t.X -= 2048;
-            t.Y += 2048;
+            t.X -= detachedOffset;
+            t.Y += detachedOffset;
         }
 
         return t;
@@ -945,13 +1071,23 @@ Script ""InitialiseLighting"" ENTER
         return null;
     }
 
-    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, int? yOffset = null)
+    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, double? yOffset = null, bool bump = false)
     {
         if (texture == null)
         {
             return null;
         }
-        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = Math.Round(ConvertUnit(texture.Value.X)), Y = Math.Round(ConvertUnit((short)(texture.Value.Y + (yOffset ?? 0)))), Sky = GetSky(transferMode), LightIndex = lightSourceIndex };
+        var x = ConvertUnit(texture.Value.X, null);
+        var y = ConvertUnit(texture.Value.Y, null) + (yOffset ?? 0);
+
+        //if (bump && y % 1 != 0)
+        //{
+        //    y -= 1;
+        //}
+
+
+        //y = Math.Floor(y);
+        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = x, Y = y, Sky = GetSky(transferMode), LightIndex = lightSourceIndex };
     }
 
     public UdbLight GetLight(Light light, short index)
@@ -1074,12 +1210,16 @@ Script ""InitialiseLighting"" ENTER
         return (short)((double)marathonTicks / 30 * 35);
     }
 
-    private double ConvertUnit(short val, int decimalPlaces = 3)
+    private double ConvertUnit(short val, int? decimalPlaces = 3)
     {
-        return Math.Round(World.ToDouble(val) * Scale, decimalPlaces);
+        var converted = World.ToDoom(val);
+        if (decimalPlaces.HasValue)
+        {
+            return Math.Round(converted, decimalPlaces.Value);
+        }
+        return converted;
     }
 }
-
 
 public class UdbLevel
 {
@@ -1147,6 +1287,8 @@ public class UdbLine
     public bool IsSolid { get; set; }
     public int? TriggerLightIndex { get; set; }
     public int? TriggerPlatformIndex { get; set; }
+    public string? ControlPanelClassValue { get; set; }
+    public int? LineIndex { get; set; }
 }
 
 public class UdbVector
