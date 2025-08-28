@@ -1,588 +1,637 @@
-using Pango;
 using System;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Reflection;
+using Atk;
+using Pango;
 
-namespace Weland
+namespace Weland;
+
+[Flags]
+public enum CohenSutherland
 {
-    [Flags]
-    public enum CohenSutherland
+    Inside = 0x0,
+    Top = 0x1,
+    Bottom = 0x2,
+    Left = 0x4,
+    Right = 0x8
+}
+
+public class Transform
+{
+    public Transform() { }
+    public double Scale = 1.0 / 16.0;
+    public short XOffset = 0;
+    public short YOffset = 0;
+
+    public double ToScreenX(short x)
     {
-        Inside = 0x0,
-        Top = 0x1,
-        Bottom = 0x2,
-        Left = 0x4,
-        Right = 0x8
+        return Math.Floor((x - XOffset) * Scale);
     }
 
-    public class Transform
+    public double ToScreenY(short y)
     {
-        public Transform() { }
-        public double Scale = 1.0 / 16.0;
-        public short XOffset = 0;
-        public short YOffset = 0;
-
-        public double ToScreenX(short x)
-        {
-            return Math.Floor((x - XOffset) * Scale);
-        }
-
-        public double ToScreenY(short y)
-        {
-            return Math.Floor((y - YOffset) * Scale);
-        }
-
-        public short ToMapX(double X)
-        {
-            return (short)Math.Min(short.MaxValue, Math.Max(short.MinValue, ((double)(X / Scale) + XOffset)));
-        }
-
-        public short ToMapY(double Y)
-        {
-            return (short)Math.Min(short.MaxValue, Math.Max(short.MinValue, ((double)(Y / Scale) + YOffset)));
-        }
-
-        public Drawer.Point ToScreenPoint(Point p)
-        {
-            return new Drawer.Point(ToScreenX(p.X), ToScreenY(p.Y));
-        }
+        return Math.Floor((y - YOffset) * Scale);
     }
 
-    public enum DrawMode
+    public short ToMapX(double X)
     {
-        Draw,
-        FloorHeight,
-        CeilingHeight,
-        PolygonType,
-        FloorLight,
-        CeilingLight,
-        MediaLight,
-        Media,
-        AmbientSound,
-        RandomSound,
-        FloorTexture,
-        CeilingTexture
+        return (short)Math.Min(short.MaxValue, Math.Max(short.MinValue, (double)(X / Scale) + XOffset));
     }
 
-    public class MapDrawingArea : Gtk.DrawingArea
+    public short ToMapY(double Y)
     {
+        return (short)Math.Min(short.MaxValue, Math.Max(short.MinValue, (double)(Y / Scale) + YOffset));
+    }
 
-        public Transform Transform = new Transform();
-        public Level Level;
-        public Grid Grid = new Grid();
-        public Selection Selection = new Selection();
-        public bool ShowMonsters = true;
-        public bool ShowObjects = true;
-        public bool ShowScenery = true;
-        public bool ShowPlayers = true;
-        public bool ShowGoals = true;
-        public bool ShowSounds = true;
-        public bool Antialias;
-        public DrawMode Mode = DrawMode.Draw;
-        public PolygonFilter Filter = x => true;
+    public Drawer.Point ToScreenPoint(Point p)
+    {
+        return new Drawer.Point(ToScreenX(p.X), ToScreenY(p.Y));
+    }
+}
 
-        public Dictionary<short, Drawer.Color> PaintColors = new Dictionary<short, Drawer.Color>();
+public enum DrawMode
+{
+    Draw,
+    FloorHeight,
+    CeilingHeight,
+    PolygonType,
+    FloorLight,
+    CeilingLight,
+    MediaLight,
+    Media,
+    AmbientSound,
+    RandomSound,
+    FloorTexture,
+    CeilingTexture
+}
 
-        Drawer drawer;
+public class MapDrawingArea : Gtk.DrawingArea
+{
 
-        public MapDrawingArea()
-        {
-            itemImages[ItemType.Magnum] = new Gdk.Pixbuf(null, "weland.images.pistol.png");
-            itemImages[ItemType.MagnumMagazine] = new Gdk.Pixbuf(null, "weland.images.pistol-ammo.png");
-            itemImages[ItemType.PlasmaPistol] = new Gdk.Pixbuf(null, "weland.images.fusion.png");
-            itemImages[ItemType.PlasmaMagazine] = new Gdk.Pixbuf(null, "weland.images.fusion-ammo.png");
-            itemImages[ItemType.AssaultRifle] = new Gdk.Pixbuf(null, "weland.images.ar.png");
-            itemImages[ItemType.AssaultRifleMagazine] = new Gdk.Pixbuf(null, "weland.images.ar-ammo.png");
-            itemImages[ItemType.AssaultGrenadeMagazine] = new Gdk.Pixbuf(null, "weland.images.ar-grenades.png");
-            itemImages[ItemType.MissileLauncher] = new Gdk.Pixbuf(null, "weland.images.rl.png");
-            itemImages[ItemType.MissileLauncherMagazine] = new Gdk.Pixbuf(null, "weland.images.rl-ammo.png");
-            itemImages[ItemType.InvisibilityPowerup] = new Gdk.Pixbuf(null, "weland.images.powerup.png");
-            itemImages[ItemType.InvincibilityPowerup] = new Gdk.Pixbuf(null, "weland.images.invinc.png");
-            itemImages[ItemType.InfravisionPowerup] = new Gdk.Pixbuf(null, "weland.images.powerup.png");
-            itemImages[ItemType.AlienShotgun] = new Gdk.Pixbuf(null, "weland.images.alien-gun.png");
-            itemImages[ItemType.Flamethrower] = new Gdk.Pixbuf(null, "weland.images.tozt.png");
-            itemImages[ItemType.FlamethrowerCanister] = new Gdk.Pixbuf(null, "weland.images.tozt-ammo.png");
-            itemImages[ItemType.ExtravisionPowerup] = new Gdk.Pixbuf(null, "weland.images.powerup.png");
-            itemImages[ItemType.OxygenPowerup] = new Gdk.Pixbuf(null, "weland.images.oxygen.png");
-            itemImages[ItemType.EnergyPowerup] = new Gdk.Pixbuf(null, "weland.images.1x.png");
-            itemImages[ItemType.DoubleEnergyPowerup] = new Gdk.Pixbuf(null, "weland.images.2x.png");
-            itemImages[ItemType.TripleEnergyPowerup] = new Gdk.Pixbuf(null, "weland.images.3x.png");
-            itemImages[ItemType.Shotgun] = new Gdk.Pixbuf(null, "weland.images.shotgun.png");
-            itemImages[ItemType.ShotgunMagazine] = new Gdk.Pixbuf(null, "weland.images.shotgun-ammo.png");
-            itemImages[ItemType.UplinkChip] = new Gdk.Pixbuf(null, "weland.images.uplink-chip.png");
-            itemImages[ItemType.SphtDoorKey] = new Gdk.Pixbuf(null, "weland.images.keycard.png");
-            itemImages[ItemType.RedBall] = new Gdk.Pixbuf(null, "weland.images.skull.png");
-            itemImages[ItemType.Smg] = new Gdk.Pixbuf(null, "weland.images.smg.png");
-            itemImages[ItemType.SmgAmmo] = new Gdk.Pixbuf(null, "weland.images.smg-ammo.png");
+    public Transform Transform = new Transform();
+    public Level Level;
+    public Grid Grid = new Grid();
+    public Selection Selection = new Selection();
+    public bool ShowMonsters = true;
+    public bool ShowObjects = true;
+    public bool ShowScenery = true;
+    public bool ShowPlayers = true;
+    public bool ShowGoals = true;
+    public bool ShowSounds = true;
+    public bool Antialias;
+    public DrawMode Mode = DrawMode.Draw;
+    public PolygonFilter Filter = x => true;
 
-            Antialias = Weland.Settings.GetSetting("Drawer/SmoothLines", true);
+    public Dictionary<short, Drawer.Color> PaintColors = [];
 
-            LoadColors();
-        }
+    Drawer drawer;
 
-        public Drawer.Color backgroundColor;
-        public Drawer.Color pointColor;
-        public Drawer.Color annotationColor;
-        public Drawer.Color impassableLineColor;
-        public Drawer.Color solidLineColor;
-        public Drawer.Color transparentLineColor;
-        public Drawer.Color selectedLineColor;
-        public Drawer.Color selectedPolygonColor;
-        public Drawer.Color destinationPolygonColor;
-        public Drawer.Color polygonColor;
-        public Drawer.Color invalidPolygonColor;
-        public Drawer.Color gridLineColor;
-        public Drawer.Color gridPointColor;
-        public Drawer.Color objectColor;
-        public Drawer.Color playerColor;
-        public Drawer.Color monsterColor;
-        public Drawer.Color civilianColor;
+    public MapDrawingArea()
+    {
+        itemImages[ItemType.Magnum] = new Gdk.Pixbuf(null, "weland.images.pistol.png");
+        itemImages[ItemType.MagnumMagazine] = new Gdk.Pixbuf(null, "weland.images.pistol-ammo.png");
+        itemImages[ItemType.PlasmaPistol] = new Gdk.Pixbuf(null, "weland.images.fusion.png");
+        itemImages[ItemType.PlasmaMagazine] = new Gdk.Pixbuf(null, "weland.images.fusion-ammo.png");
+        itemImages[ItemType.AssaultRifle] = new Gdk.Pixbuf(null, "weland.images.ar.png");
+        itemImages[ItemType.AssaultRifleMagazine] = new Gdk.Pixbuf(null, "weland.images.ar-ammo.png");
+        itemImages[ItemType.AssaultGrenadeMagazine] = new Gdk.Pixbuf(null, "weland.images.ar-grenades.png");
+        itemImages[ItemType.MissileLauncher] = new Gdk.Pixbuf(null, "weland.images.rl.png");
+        itemImages[ItemType.MissileLauncherMagazine] = new Gdk.Pixbuf(null, "weland.images.rl-ammo.png");
+        itemImages[ItemType.InvisibilityPowerup] = new Gdk.Pixbuf(null, "weland.images.powerup.png");
+        itemImages[ItemType.InvincibilityPowerup] = new Gdk.Pixbuf(null, "weland.images.invinc.png");
+        itemImages[ItemType.InfravisionPowerup] = new Gdk.Pixbuf(null, "weland.images.powerup.png");
+        itemImages[ItemType.AlienShotgun] = new Gdk.Pixbuf(null, "weland.images.alien-gun.png");
+        itemImages[ItemType.Flamethrower] = new Gdk.Pixbuf(null, "weland.images.tozt.png");
+        itemImages[ItemType.FlamethrowerCanister] = new Gdk.Pixbuf(null, "weland.images.tozt-ammo.png");
+        itemImages[ItemType.ExtravisionPowerup] = new Gdk.Pixbuf(null, "weland.images.powerup.png");
+        itemImages[ItemType.OxygenPowerup] = new Gdk.Pixbuf(null, "weland.images.oxygen.png");
+        itemImages[ItemType.EnergyPowerup] = new Gdk.Pixbuf(null, "weland.images.1x.png");
+        itemImages[ItemType.DoubleEnergyPowerup] = new Gdk.Pixbuf(null, "weland.images.2x.png");
+        itemImages[ItemType.TripleEnergyPowerup] = new Gdk.Pixbuf(null, "weland.images.3x.png");
+        itemImages[ItemType.Shotgun] = new Gdk.Pixbuf(null, "weland.images.shotgun.png");
+        itemImages[ItemType.ShotgunMagazine] = new Gdk.Pixbuf(null, "weland.images.shotgun-ammo.png");
+        itemImages[ItemType.UplinkChip] = new Gdk.Pixbuf(null, "weland.images.uplink-chip.png");
+        itemImages[ItemType.SphtDoorKey] = new Gdk.Pixbuf(null, "weland.images.keycard.png");
+        itemImages[ItemType.RedBall] = new Gdk.Pixbuf(null, "weland.images.skull.png");
+        itemImages[ItemType.Smg] = new Gdk.Pixbuf(null, "weland.images.smg.png");
+        itemImages[ItemType.SmgAmmo] = new Gdk.Pixbuf(null, "weland.images.smg-ammo.png");
 
-        Gdk.Pixbuf sceneryImage = new Gdk.Pixbuf(null, "weland.images.flower.png");
-        Gdk.Pixbuf soundImage = new Gdk.Pixbuf(null, "weland.images.sound.png");
-        Gdk.Pixbuf goalImage = new Gdk.Pixbuf(null, "weland.images.flag.png");
-        Gdk.Pixbuf visualModeImage = new Gdk.Pixbuf(null, "weland.images.dingle.png");
+        Antialias = Weland.Settings.GetSetting("Drawer/SmoothLines", true);
 
-        Dictionary<ItemType, Gdk.Pixbuf> itemImages = new Dictionary<ItemType, Gdk.Pixbuf>();
+        LoadColors();
+    }
 
-        protected override bool OnExposeEvent(Gdk.EventExpose args)
-        {
+    public Drawer.Color backgroundColor;
+    public Drawer.Color pointColor;
+    public Drawer.Color annotationColor;
+    public Drawer.Color impassableLineColor;
+    public Drawer.Color solidLineColor;
+    public Drawer.Color transparentLineColor;
+    public Drawer.Color selectedLineColor;
+    public Drawer.Color selectedPolygonColor;
+    public Drawer.Color destinationPolygonColor;
+    public Drawer.Color polygonColor;
+    public Drawer.Color invalidPolygonColor;
+    public Drawer.Color gridLineColor;
+    public Drawer.Color gridPointColor;
+    public Drawer.Color objectColor;
+    public Drawer.Color playerColor;
+    public Drawer.Color monsterColor;
+    public Drawer.Color civilianColor;
+
+    Gdk.Pixbuf sceneryImage = new Gdk.Pixbuf(null, "weland.images.flower.png");
+    Gdk.Pixbuf soundImage = new Gdk.Pixbuf(null, "weland.images.sound.png");
+    Gdk.Pixbuf goalImage = new Gdk.Pixbuf(null, "weland.images.flag.png");
+    Gdk.Pixbuf visualModeImage = new Gdk.Pixbuf(null, "weland.images.dingle.png");
+
+    Dictionary<ItemType, Gdk.Pixbuf> itemImages = [];
+
+    protected override bool OnExposeEvent(Gdk.EventExpose args)
+    {
 #if SYSTEM_DRAWING
 	    drawer = new SystemDrawer(GdkWindow, Antialias);
 #else
-            if (!Antialias && PlatformDetection.IsX11)
-            {
-                drawer = new GdkDrawer(GdkWindow);
-            }
-            else
-            {
-                drawer = new CairoDrawer(GdkWindow, Antialias);
-            }
+        if (!Antialias && PlatformDetection.IsX11)
+        {
+            drawer = new GdkDrawer(GdkWindow);
+        }
+        else
+        {
+            drawer = new CairoDrawer(GdkWindow, Antialias);
+        }
 #endif
-            drawer.Clear(backgroundColor);
+        drawer.Clear(backgroundColor);
 
-            if (Grid.Visible)
+        if (Grid.Visible)
+        {
+            DrawGrid();
+        }
+
+        if (Level != null)
+        {
+
+            // clipping area to Map
+            int Left, Right, Top, Bottom;
+            Left = Transform.ToMapX(args.Area.X);
+            Right = Transform.ToMapX(args.Area.Width + args.Area.X);
+            Top = Transform.ToMapY(args.Area.Y);
+            Bottom = Transform.ToMapY(args.Area.Height + args.Area.Y);
+
+            var Points = new CohenSutherland[Level.Endpoints.Count];
+
+            for (short i = 0; i < Level.Endpoints.Count; ++i)
             {
-                DrawGrid();
+                var p = Level.Endpoints[i];
+                Points[i] = CohenSutherland.Inside;
+                if (p.X < Left)
+                {
+                    Points[i] |= CohenSutherland.Left;
+                }
+                else if (p.X > Right)
+                {
+                    Points[i] |= CohenSutherland.Right;
+                }
+
+                if (p.Y < Top)
+                {
+                    Points[i] |= CohenSutherland.Top;
+                }
+                else if (p.Y > Bottom)
+                {
+                    Points[i] |= CohenSutherland.Bottom;
+                }
             }
 
-            if (Level != null)
+            for (var i = 0; i < Level.Polygons.Count; ++i)
             {
-
-                // clipping area to Map
-                int Left, Right, Top, Bottom;
-                Left = Transform.ToMapX(args.Area.X);
-                Right = Transform.ToMapX(args.Area.Width + args.Area.X);
-                Top = Transform.ToMapY(args.Area.Y);
-                Bottom = Transform.ToMapY(args.Area.Height + args.Area.Y);
-
-                CohenSutherland[] Points = new CohenSutherland[Level.Endpoints.Count];
-
-                for (short i = 0; i < Level.Endpoints.Count; ++i)
+                var polygon = Level.Polygons[i];
+                var code = ~CohenSutherland.Inside;
+                for (short v = 0; v < polygon.VertexCount; ++v)
                 {
-                    Point p = Level.Endpoints[i];
-                    Points[i] = CohenSutherland.Inside;
-                    if (p.X < Left)
-                    {
-                        Points[i] |= CohenSutherland.Left;
-                    }
-                    else if (p.X > Right)
-                    {
-                        Points[i] |= CohenSutherland.Right;
-                    }
+                    code &= Points[polygon.EndpointIndexes[v]];
+                }
+                if (code == CohenSutherland.Inside && Filter(polygon))
+                {
+                    var layers = GetLayersForPoly(i);
 
-                    if (p.Y < Top)
+                    if (IsPolyVisible(i))
                     {
-                        Points[i] |= CohenSutherland.Top;
+                        var col = GetColourForLayers(layers);
+
+                        DrawPolygon((short)i, PolygonColor.Normal, col);
                     }
-                    else if (p.Y > Bottom)
+                }
+            }
+
+            if (Selection.Polygon != -1)
+            {
+                var polygon = Level.Polygons[Selection.Polygon];
+                var code = ~CohenSutherland.Inside;
+                if (Filter(polygon))
+                {
+                    for (short i = 0; i < polygon.VertexCount; ++i)
                     {
-                        Points[i] |= CohenSutherland.Bottom;
+                        code &= Points[polygon.EndpointIndexes[i]];
+                    }
+                    if (code == CohenSutherland.Inside)
+                    {
+                        DrawPolygon(Selection.Polygon, PolygonColor.Selected);
                     }
                 }
 
-                for (int i = 0; i < Level.Polygons.Count; ++i)
+                if (polygon.Type == PolygonType.Teleporter && polygon.Permutation >= 0 && polygon.Permutation < Level.Polygons.Count)
                 {
-                    Polygon polygon = Level.Polygons[i];
-                    CohenSutherland code = ~CohenSutherland.Inside;
-                    for (short v = 0; v < polygon.VertexCount; ++v)
+                    var destination = Level.Polygons[polygon.Permutation];
+                    if (Filter(destination))
                     {
-                        code &= Points[polygon.EndpointIndexes[v]];
-                    }
-                    if (code == CohenSutherland.Inside && Filter(polygon) && !Level.DetachedPolygonIndexes.Contains((short)i))
-                    {
-                        DrawPolygon((short)i, PolygonColor.Normal);
-                    }
-                }
-
-                if (Selection.Polygon != -1)
-                {
-                    Polygon polygon = Level.Polygons[Selection.Polygon];
-                    CohenSutherland code = ~CohenSutherland.Inside;
-                    if (Filter(polygon))
-                    {
-                        for (short i = 0; i < polygon.VertexCount; ++i)
+                        code = ~CohenSutherland.Inside;
+                        for (short i = 0; i < destination.VertexCount; ++i)
                         {
-                            code &= Points[polygon.EndpointIndexes[i]];
+                            code &= Points[destination.EndpointIndexes[i]];
                         }
                         if (code == CohenSutherland.Inside)
                         {
-                            DrawPolygon(Selection.Polygon, PolygonColor.Selected);
+                            DrawPolygon(polygon.Permutation, PolygonColor.Destination);
                         }
                     }
-
-                    if (polygon.Type == PolygonType.Teleporter && polygon.Permutation >= 0 && polygon.Permutation < Level.Polygons.Count)
-                    {
-                        Polygon destination = Level.Polygons[polygon.Permutation];
-                        if (Filter(destination))
-                        {
-                            code = ~CohenSutherland.Inside;
-                            for (short i = 0; i < destination.VertexCount; ++i)
-                            {
-                                code &= Points[destination.EndpointIndexes[i]];
-                            }
-                            if (code == CohenSutherland.Inside)
-                            {
-                                DrawPolygon(polygon.Permutation, PolygonColor.Destination);
-                            }
-                        }
-                    }
-                }
-
-                Line selectedLine = null;
-                if (Selection.Line != -1)
-                {
-                    selectedLine = Level.Lines[Selection.Line];
-                }
-
-                foreach (Line line in Level.Lines)
-                {
-                    if ((Points[line.EndpointIndexes[0]] & Points[line.EndpointIndexes[1]]) == CohenSutherland.Inside && line != selectedLine)
-                    {
-                        if (Level.FilterLine(Filter, line))
-                        {
-                            DrawLine(line);
-                        }
-                    }
-                }
-
-                if (selectedLine != null)
-                {
-                    DrawLine(selectedLine);
-                }
-
-                for (short i = 0; i < Level.Endpoints.Count; ++i)
-                {
-                    if (Level.FilterPoint(Filter, i) && Points[i] == CohenSutherland.Inside)
-                    {
-                        DrawPoint(Level.Endpoints[i]);
-                    }
-                }
-
-                Annotation selectedAnnotation = null;
-                if (Selection.Annotation != -1)
-                {
-                    selectedAnnotation = Level.Annotations[Selection.Annotation];
-                }
-                if (Mode == DrawMode.Draw)
-                {
-                    foreach (Annotation note in Level.Annotations)
-                    {
-                        if (note.PolygonIndex == -1 || Filter(Level.Polygons[note.PolygonIndex]))
-                        {
-                            DrawAnnotation(note, note == selectedAnnotation);
-                        }
-                    }
-
-                    int ObjectSize = (int)(16 / 2 / Transform.Scale);
-                    MapObject selectedObj = null;
-                    if (Selection.Object != -1)
-                    {
-                        selectedObj = Level.Objects[Selection.Object];
-                    }
-                    foreach (MapObject obj in Level.Objects)
-                    {
-                        if (obj != selectedObj && obj.X > Left - ObjectSize && obj.X < Right + ObjectSize && obj.Y > Top - ObjectSize && obj.Y < Bottom + ObjectSize)
-                        {
-                            if (obj.PolygonIndex == -1 || Filter(Level.Polygons[obj.PolygonIndex]))
-                            {
-                                DrawObject(obj, false);
-                            }
-                        }
-                    }
-
-                    if (Level.VisualModePolygonIndex != -1 &&
-                        Level.VisualModePoint.X > Left - ObjectSize &&
-                        Level.VisualModePoint.X < Right + ObjectSize &&
-                        Level.VisualModePoint.Y > Top - ObjectSize &&
-                        Level.VisualModePoint.Y < Bottom + ObjectSize)
-                    {
-
-                        DrawVisualMode(Level.VisualModePoint);
-                    }
-
-                    if (selectedObj != null && selectedObj.X > Left - ObjectSize && selectedObj.X < Right + ObjectSize && selectedObj.Y > Top - ObjectSize && selectedObj.Y < Bottom + ObjectSize)
-                    {
-                        if (selectedObj.PolygonIndex == -1 || Filter(Level.Polygons[selectedObj.PolygonIndex]))
-                        {
-                            DrawObject(selectedObj, true);
-                        }
-                    }
-                }
-
-                if (Level.TemporaryLineStartIndex != -1)
-                {
-                    // draw the temporarily drawn line
-                    drawer.DrawLine(selectedLineColor, Transform.ToScreenPoint(Level.Endpoints[Level.TemporaryLineStartIndex]), Transform.ToScreenPoint(Level.TemporaryLineEnd));
-                }
-
-                if (Selection.Point != -1)
-                {
-                    // draw the selected point
-                    DrawFatPoint(selectedLineColor, Level.Endpoints[Selection.Point]);
                 }
             }
 
-            drawer.Dispose();
-            return true;
+            Line selectedLine = null;
+            if (Selection.Line != -1)
+            {
+                selectedLine = Level.Lines[Selection.Line];
+            }
+
+            foreach (var line in Level.Lines)
+            {
+                if ((Points[line.EndpointIndexes[0]] & Points[line.EndpointIndexes[1]]) == CohenSutherland.Inside && line != selectedLine)
+                {
+                    if (Level.FilterLine(Filter, line))
+                    {
+                        DrawLine(line);
+                    }
+                }
+            }
+
+            if (selectedLine != null)
+            {
+                DrawLine(selectedLine);
+            }
+
+            for (short i = 0; i < Level.Endpoints.Count; ++i)
+            {
+                if (Level.FilterPoint(Filter, i) && Points[i] == CohenSutherland.Inside)
+                {
+                    DrawPoint(Level.Endpoints[i]);
+                }
+            }
+
+            Annotation selectedAnnotation = null;
+            if (Selection.Annotation != -1)
+            {
+                selectedAnnotation = Level.Annotations[Selection.Annotation];
+            }
+            if (Mode == DrawMode.Draw)
+            {
+                foreach (var note in Level.Annotations)
+                {
+                    if (note.PolygonIndex == -1 || Filter(Level.Polygons[note.PolygonIndex]))
+                    {
+                        DrawAnnotation(note, note == selectedAnnotation);
+                    }
+                }
+
+                var ObjectSize = (int)(16 / 2 / Transform.Scale);
+                MapObject selectedObj = null;
+                if (Selection.Object != -1)
+                {
+                    selectedObj = Level.Objects[Selection.Object];
+                }
+                foreach (var obj in Level.Objects)
+                {
+                    if (obj != selectedObj && obj.X > Left - ObjectSize && obj.X < Right + ObjectSize && obj.Y > Top - ObjectSize && obj.Y < Bottom + ObjectSize)
+                    {
+                        if (obj.PolygonIndex == -1 || Filter(Level.Polygons[obj.PolygonIndex]))
+                        {
+                            DrawObject(obj, false);
+                        }
+                    }
+                }
+
+                if (Level.VisualModePolygonIndex != -1 &&
+                    Level.VisualModePoint.X > Left - ObjectSize &&
+                    Level.VisualModePoint.X < Right + ObjectSize &&
+                    Level.VisualModePoint.Y > Top - ObjectSize &&
+                    Level.VisualModePoint.Y < Bottom + ObjectSize)
+                {
+
+                    DrawVisualMode(Level.VisualModePoint);
+                }
+
+                if (selectedObj != null && selectedObj.X > Left - ObjectSize && selectedObj.X < Right + ObjectSize && selectedObj.Y > Top - ObjectSize && selectedObj.Y < Bottom + ObjectSize)
+                {
+                    if (selectedObj.PolygonIndex == -1 || Filter(Level.Polygons[selectedObj.PolygonIndex]))
+                    {
+                        DrawObject(selectedObj, true);
+                    }
+                }
+            }
+
+            if (Level.TemporaryLineStartIndex != -1)
+            {
+                // draw the temporarily drawn line
+                drawer.DrawLine(selectedLineColor, Transform.ToScreenPoint(Level.Endpoints[Level.TemporaryLineStartIndex]), Transform.ToScreenPoint(Level.TemporaryLineEnd));
+            }
+
+            if (Selection.Point != -1)
+            {
+                // draw the selected point
+                DrawFatPoint(selectedLineColor, Level.Endpoints[Selection.Point]);
+            }
         }
 
-        public void Center(short X, short Y)
-        {
-            int cx = (int)Math.Round(X - Allocation.Width / 2 / Transform.Scale);
-            int cy = (int)Math.Round(Y - Allocation.Height / 2 / Transform.Scale);
-            int maxX = (int)Math.Round(short.MaxValue - Allocation.Width / Transform.Scale);
-            int maxY = (int)Math.Round(short.MaxValue - Allocation.Height / Transform.Scale);
+        drawer.Dispose();
+        return true;
+    }
 
-            if (cx < short.MinValue)
-            {
-                cx = short.MinValue;
-            }
-            else if (cx > maxX)
-            {
-                cx = maxX;
-            }
-            if (cy < short.MinValue)
-            {
-                cy = short.MinValue;
-            }
-            else if (cy > maxY)
-            {
-                cy = maxY;
-            }
-            Transform.XOffset = (short)cx;
-            Transform.YOffset = (short)cy;
+    private Drawer.Color? GetColourForLayers(List<int> layers)
+    {
+        var colours = new List<Drawer.Color>
+        {
+            new Drawer.Color(1.0, 1.0, 1.0, 0.5),
+            new Drawer.Color(1.0, 0.5, 0.5, 0.5),
+            new Drawer.Color(0.5, 0.5, 1.0, 0.5),
+            new Drawer.Color(0.5, 1.0, 0.5, 0.5),
+        };
+
+        var mappedColours = layers.Select(x => colours[x - 1]).ToList();
+
+        return AverageColour(mappedColours);
+
+    }
+
+    private Drawer.Color? AverageColour(List<Drawer.Color> colours)
+    {
+        if (colours.Count == 0)
+        {
+            return new Drawer.Color(0.5, 0.5, 0.5, 0.5);
         }
+        return new Drawer.Color(colours.Average(c => c.R), colours.Average(c => c.G), colours.Average(c => c.B), colours.Average(c => c.A));
+    }
 
-        void DrawPoint(Point point)
+    private bool IsPolyVisible(int i)
+    {
+        var layers = GetLayersForPoly(i);
+        return Level.VisibleLayer == null || layers.Contains(Level.VisibleLayer.Value);
+    }
+
+    private List<int> GetLayersForPoly(int i)
+    {
+        return Level.PolygonLayers.ContainsKey((short)i) ? Level.PolygonLayers[(short)i] : [1];
+    }
+
+    public void Center(short X, short Y)
+    {
+        var cx = (int)Math.Round(X - (Allocation.Width / 2 / Transform.Scale));
+        var cy = (int)Math.Round(Y - (Allocation.Height / 2 / Transform.Scale));
+        var maxX = (int)Math.Round(short.MaxValue - (Allocation.Width / Transform.Scale));
+        var maxY = (int)Math.Round(short.MaxValue - (Allocation.Height / Transform.Scale));
+
+        if (cx < short.MinValue)
         {
-            drawer.DrawPoint(pointColor, Transform.ToScreenPoint(point));
+            cx = short.MinValue;
         }
-
-        void DrawFatPoint(Drawer.Color color, Point point)
+        else if (cx > maxX)
         {
-            const int r = 2;
-            List<Drawer.Point> points = new List<Drawer.Point>();
-            double X = Transform.ToScreenX(point.X);
-            double Y = Transform.ToScreenY(point.Y);
-            points.Add(new Drawer.Point(X - r, Y - r));
-            points.Add(new Drawer.Point(X + r, Y - r));
-            points.Add(new Drawer.Point(X + r, Y + r));
-            points.Add(new Drawer.Point(X - r, Y + r));
-            drawer.FillStrokePolygon(color, new Drawer.Color(0, 0, 0), points, false);
+            cx = maxX;
         }
-
-        void DrawGrid()
+        if (cy < short.MinValue)
         {
-            Point p1 = new Point();
-            Point p2 = new Point();
+            cy = short.MinValue;
+        }
+        else if (cy > maxY)
+        {
+            cy = maxY;
+        }
+        Transform.XOffset = (short)cx;
+        Transform.YOffset = (short)cy;
+    }
 
-            short Left = Transform.ToMapX(0);
-            short Right = Transform.ToMapX(Allocation.Width);
-            short Top = Transform.ToMapY(0);
-            short Bottom = Transform.ToMapY(Allocation.Height);
+    void DrawPoint(Point point)
+    {
+        drawer.DrawPoint(pointColor, Transform.ToScreenPoint(point));
+    }
 
-            /*** begin custom grid code ***/
+    void DrawFatPoint(Drawer.Color color, Point point)
+    {
+        const int r = 2;
+        List<Drawer.Point> points = [];
+        var X = Transform.ToScreenX(point.X);
+        var Y = Transform.ToScreenY(point.Y);
+        points.Add(new Drawer.Point(X - r, Y - r));
+        points.Add(new Drawer.Point(X + r, Y - r));
+        points.Add(new Drawer.Point(X + r, Y + r));
+        points.Add(new Drawer.Point(X - r, Y + r));
+        drawer.FillStrokePolygon(color, new Drawer.Color(0, 0, 0), points, false);
+    }
 
-            double s, c, lpx, lpy, tmp, tmp2;
-            int nlines, wu, intoffpar, intoffperp, intskip, r;
+    void DrawGrid()
+    {
+        var p1 = new Point();
+        var p2 = new Point();
 
-            if (!Grid.UseCustomGrid)
+        var Left = Transform.ToMapX(0);
+        var Right = Transform.ToMapX(Allocation.Width);
+        var Top = Transform.ToMapY(0);
+        var Bottom = Transform.ToMapY(Allocation.Height);
+
+        /*** begin custom grid code ***/
+
+        double s, c, lpx, lpy, tmp, tmp2;
+        int nlines, wu, intoffpar, intoffperp, intskip, r;
+
+        if (!Grid.UseCustomGrid)
+        {
+            //the original code
+            // draw horizontal map lines
+            for (var j = Top / Grid.Resolution * Grid.Resolution; j < Bottom; j += Grid.Resolution)
             {
-                //the original code
-                // draw horizontal map lines
-                for (int j = (Top / Grid.Resolution) * Grid.Resolution; j < Bottom; j += Grid.Resolution)
-                {
-                    p1.X = Left;
-                    p1.Y = (short)j;
-                    p2.X = Right;
-                    p2.Y = (short)j;
+                p1.X = Left;
+                p1.Y = (short)j;
+                p2.X = Right;
+                p2.Y = (short)j;
 
-                    drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
-                }
+                drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+            }
 
-                // draw vertical map lines
-                for (int i = (Left / Grid.Resolution) * Grid.Resolution; i < Right; i += Grid.Resolution)
+            // draw vertical map lines
+            for (var i = Left / Grid.Resolution * Grid.Resolution; i < Right; i += Grid.Resolution)
+            {
+                p1.X = (short)i;
+                p1.Y = Top;
+                p2.X = (short)i;
+                p2.Y = Bottom;
+
+                drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+            }
+
+            // draw grid intersects
+            wu = Math.Max(1024, (int)Grid.Resolution);
+            for (var i = Left / wu * wu; i < Right; i += wu)
+            {
+                for (var j = Top / wu * wu; j < Bottom; j += wu)
                 {
                     p1.X = (short)i;
-                    p1.Y = Top;
-                    p2.X = (short)i;
-                    p2.Y = Bottom;
-
-                    drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+                    p1.Y = (short)j;
+                    drawer.DrawGridIntersect(gridPointColor, Transform.ToScreenPoint(p1));
                 }
-
-                // draw grid intersects
-                wu = Math.Max(1024, (int)Grid.Resolution);
-                for (int i = (Left / wu) * wu; i < Right; i += wu)
-                {
-                    for (int j = (Top / wu) * wu; j < Bottom; j += wu)
-                    {
-                        p1.X = (short)i;
-                        p1.Y = (short)j;
-                        drawer.DrawGridIntersect(gridPointColor, Transform.ToScreenPoint(p1));
-                    }
-                }
-                return;
             }
+            return;
+        }
 
-            //lpx and lpy represent a point on a line. they are used to write the parametric form of each line,
-            //x(t) = lpx + t*c ,  y(t) = lpy - t*s   for lines that are horizontal when the rotation angle is 0, and
-            //x(t) = lpx + t*s ,  y(t) = lpy + t*c   for the perpendicular lines.
+        //lpx and lpy represent a point on a line. they are used to write the parametric form of each line,
+        //x(t) = lpx + t*c ,  y(t) = lpy - t*s   for lines that are horizontal when the rotation angle is 0, and
+        //x(t) = lpx + t*s ,  y(t) = lpy + t*c   for the perpendicular lines.
 
-            r = (int)(Grid.Resolution * Grid.Scale);
-            c = Math.Cos(Grid.Rotation * 2 * Math.PI / 360);
-            s = Math.Sin(Grid.Rotation * 2 * Math.PI / 360);
-            lpx = Grid.Center.X; lpy = Grid.Center.Y;
+        r = (int)(Grid.Resolution * Grid.Scale);
+        c = Math.Cos(Grid.Rotation * 2 * Math.PI / 360);
+        s = Math.Sin(Grid.Rotation * 2 * Math.PI / 360);
+        lpx = Grid.Center.X; lpy = Grid.Center.Y;
 
-            //draw the lines that are horizontal with no rotation
-            //find the line that is closest to the upper left corner and move (lpx,lpy) onto it
-            tmp = c * (Left - lpx) - s * (Top - lpy);
-            //tmp=r*Math.Ceiling(tmp/r);
-            lpx += tmp * c; lpy -= tmp * s;
-            if (Math.Abs(s) > Math.Abs(c)) tmp = Math.Ceiling((Left - lpx) / (r * s));
-            else tmp = Math.Ceiling((Top - lpy) / (r * c));
-            lpx += r * tmp * s; lpy += r * tmp * c;
+        //draw the lines that are horizontal with no rotation
+        //find the line that is closest to the upper left corner and move (lpx,lpy) onto it
+        tmp = (c * (Left - lpx)) - (s * (Top - lpy));
+        //tmp=r*Math.Ceiling(tmp/r);
+        lpx += tmp * c; lpy -= tmp * s;
+        if (Math.Abs(s) > Math.Abs(c)) tmp = Math.Ceiling((Left - lpx) / (r * s));
+        else tmp = Math.Ceiling((Top - lpy) / (r * c));
+        lpx += r * tmp * s; lpy += r * tmp * c;
 
-            //calculate the number of lines to draw
-            tmp = c * (Right - lpx) - s * (Bottom - lpy);
-            if (Math.Abs(s) > Math.Abs(c)) nlines = (int)Math.Ceiling((Right - lpx - tmp * c) / (r * s));
-            else nlines = (int)Math.Ceiling((Bottom - lpy + tmp * s) / (r * c));
+        //calculate the number of lines to draw
+        tmp = (c * (Right - lpx)) - (s * (Bottom - lpy));
+        if (Math.Abs(s) > Math.Abs(c)) nlines = (int)Math.Ceiling((Right - lpx - (tmp * c)) / (r * s));
+        else nlines = (int)Math.Ceiling((Bottom - lpy + (tmp * s)) / (r * c));
 
-            //draw the lines
-            for (; nlines > 0; nlines--)
+        //draw the lines
+        for (; nlines > 0; nlines--)
+        {
+            //calculate the intersection of this line with the edges of the viewing area
+            //have to use a double temporary value because of precision issues
+            tmp = lpx + ((lpy - Bottom) * c / s);
+            //i used to check here in case s is close to 0 but for some reason that doesn't seem necessary
+            if (tmp < Left) { p1.X = Left; p1.Y = (short)(lpy + ((lpx - Left) * s / c)); }
+            else { p1.X = (short)tmp; p1.Y = Bottom; }
+            tmp = lpx + ((lpy - Top) * c / s);
+            if (tmp > Right) { p2.X = Right; p2.Y = (short)(lpy + ((lpx - Right) * s / c)); }
+            else { p2.X = (short)tmp; p2.Y = Top; }
+            drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+
+            //move to the next line
+            lpx += r * s; lpy += r * c;
+        }
+
+        //do the same for the perpendicular lines, drawing from bottom left to upper right
+        //also draw intersections while drawing lines since it's easier to do that here than afterward
+        //fist calculate the number of lines between drawn intersections
+        wu = Math.Max(1024, (int)Grid.Resolution);
+        intskip = Math.Max(1, wu / Grid.Resolution);
+        //note that i use Grid.Resolution instead of r here because the scaling factor should multiply wu, which would then cancel in the division
+
+        lpx = Grid.Center.X; lpy = Grid.Center.Y;
+        tmp = (s * (Left - lpx)) + (c * (Bottom - lpy));
+        tmp = r * Math.Ceiling(tmp / r);
+        lpx += tmp * s; lpy += tmp * c;
+        //save the offset between the center and the next intersection that needs to be drawn, parallel to the lines
+        intoffpar = ((int)(tmp / r)) % intskip;
+        if (Math.Abs(c) > Math.Abs(s)) tmp = Math.Ceiling((Left - lpx) / (r * c));
+        else tmp = Math.Ceiling((Bottom - lpy) / (r * -s));
+        lpx += r * tmp * c; lpy += r * tmp * -s;
+        intoffperp = ((int)tmp) % intskip;  //same as above but in the perpendicular direction
+        tmp = (s * (Right - lpx)) + (c * (Top - lpy));
+        if (Math.Abs(c) > Math.Abs(s)) nlines = (int)Math.Ceiling((Right - lpx - (tmp * s)) / (r * c));
+        else nlines = (int)Math.Ceiling((Top - lpy - (tmp * c)) / (r * -s));
+
+        for (var j = 0; j < nlines; j++)
+        {
+            tmp = lpx - ((lpy - Bottom) * s / c);
+            if (tmp > Right) { p1.X = Right; p1.Y = (short)(lpy - ((lpx - Right) * c / s)); }
+            else { p1.X = (short)tmp; p1.Y = Bottom; }
+            tmp = lpx - ((lpy - Top) * s / c);
+            if (tmp < Left) { p2.X = Left; p2.Y = (short)(lpy - ((lpx - Left) * c / s)); }
+            else { p2.X = (short)tmp; p2.Y = Top; }
+            drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
+
+            //draw the intersections
+            //this is done in two steps, once for either direction away from the perpendicular line passing through (lpx,lpy)
+            //only do this when we are at one of the intersections that needs drawing
+            if ((j + intoffperp) % intskip == 0)
             {
-                //calculate the intersection of this line with the edges of the viewing area
-                //have to use a double temporary value because of precision issues
-                tmp = lpx + (lpy - Bottom) * c / s;
-                //i used to check here in case s is close to 0 but for some reason that doesn't seem necessary
-                if (tmp < Left) { p1.X = Left; p1.Y = (short)(lpy + (lpx - Left) * s / c); }
-                else { p1.X = (short)tmp; p1.Y = Bottom; }
-                tmp = lpx + (lpy - Top) * c / s;
-                if (tmp > Right) { p2.X = Right; p2.Y = (short)(lpy + (lpx - Right) * s / c); }
-                else { p2.X = (short)tmp; p2.Y = Top; }
-                drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
-
-                //move to the next line
-                lpx += r * s; lpy += r * c;
-            }
-
-            //do the same for the perpendicular lines, drawing from bottom left to upper right
-            //also draw intersections while drawing lines since it's easier to do that here than afterward
-            //fist calculate the number of lines between drawn intersections
-            wu = Math.Max(1024, (int)Grid.Resolution);
-            intskip = Math.Max(1, wu / Grid.Resolution);
-            //note that i use Grid.Resolution instead of r here because the scaling factor should multiply wu, which would then cancel in the division
-
-            lpx = Grid.Center.X; lpy = Grid.Center.Y;
-            tmp = s * (Left - lpx) + c * (Bottom - lpy);
-            tmp = r * Math.Ceiling(tmp / r);
-            lpx += tmp * s; lpy += tmp * c;
-            //save the offset between the center and the next intersection that needs to be drawn, parallel to the lines
-            intoffpar = ((int)(tmp / r)) % intskip;
-            if (Math.Abs(c) > Math.Abs(s)) tmp = Math.Ceiling((Left - lpx) / (r * c));
-            else tmp = Math.Ceiling((Bottom - lpy) / (r * -s));
-            lpx += r * tmp * c; lpy += r * tmp * -s;
-            intoffperp = ((int)tmp) % intskip;  //same as above but in the perpendicular direction
-            tmp = s * (Right - lpx) + c * (Top - lpy);
-            if (Math.Abs(c) > Math.Abs(s)) nlines = (int)Math.Ceiling((Right - lpx - tmp * s) / (r * c));
-            else nlines = (int)Math.Ceiling((Top - lpy - tmp * c) / (r * -s));
-
-            for (int j = 0; j < nlines; j++)
-            {
-                tmp = lpx - (lpy - Bottom) * s / c;
-                if (tmp > Right) { p1.X = Right; p1.Y = (short)(lpy - (lpx - Right) * c / s); }
-                else { p1.X = (short)tmp; p1.Y = Bottom; }
-                tmp = lpx - (lpy - Top) * s / c;
-                if (tmp < Left) { p2.X = Left; p2.Y = (short)(lpy - (lpx - Left) * c / s); }
-                else { p2.X = (short)tmp; p2.Y = Top; }
-                drawer.DrawLine(gridLineColor, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
-
-                //draw the intersections
-                //this is done in two steps, once for either direction away from the perpendicular line passing through (lpx,lpy)
-                //only do this when we are at one of the intersections that needs drawing
-                if ((j + intoffperp) % intskip == 0)
+                //find the next line 
+                tmp = lpx - (r * intoffpar * s); tmp2 = lpy - (r * intoffpar * c);
+                //this seems a little silly, but i don't know of an easier/better way around it; when the screen contains portions of the world
+                //near the edges, we might start out offworld - so just keep hopping over lines until we're onworld or we've gone too far
+                while ((tmp < short.MinValue || tmp2 < short.MinValue || tmp > short.MaxValue || tmp2 > short.MaxValue) && tmp > Left && tmp2 > Top)
                 {
-                    //find the next line 
-                    tmp = lpx - r * intoffpar * s; tmp2 = lpy - r * intoffpar * c;
-                    //this seems a little silly, but i don't know of an easier/better way around it; when the screen contains portions of the world
-                    //near the edges, we might start out offworld - so just keep hopping over lines until we're onworld or we've gone too far
-                    while ((tmp < short.MinValue || tmp2 < short.MinValue || tmp > short.MaxValue || tmp2 > short.MaxValue) && (tmp > Left && tmp2 > Top))
-                    {
-                        tmp -= r * intskip * s; tmp2 -= r * intskip * c;
-                    }
-                    while (tmp > Left && tmp2 > Top)
-                    {
-                        p1.X = (short)tmp; p1.Y = (short)tmp2;
-                        drawer.DrawGridIntersect(gridPointColor, Transform.ToScreenPoint(p1));
-                        tmp -= r * intskip * s; tmp2 -= r * intskip * c;
-                    }
-                    tmp = lpx + r * (intskip - intoffpar) * s; tmp2 = lpy + r * (intskip - intoffpar) * c;
-                    while ((tmp < short.MinValue || tmp2 < short.MinValue || tmp > short.MaxValue || tmp2 > short.MaxValue) && (tmp < Right && tmp2 < Bottom))
-                    {
-                        tmp += r * intskip * s; tmp2 += r * intskip * c;
-                    }
-                    while (tmp < Right && tmp2 < Bottom)
-                    {
-                        p1.X = (short)tmp; p1.Y = (short)tmp2;
-                        drawer.DrawGridIntersect(gridPointColor, Transform.ToScreenPoint(p1));
-                        tmp += r * intskip * s; tmp2 += r * intskip * c;
-                    }
+                    tmp -= r * intskip * s; tmp2 -= r * intskip * c;
                 }
-
-                lpx += r * c; lpy -= r * s;
+                while (tmp > Left && tmp2 > Top)
+                {
+                    p1.X = (short)tmp; p1.Y = (short)tmp2;
+                    drawer.DrawGridIntersect(gridPointColor, Transform.ToScreenPoint(p1));
+                    tmp -= r * intskip * s; tmp2 -= r * intskip * c;
+                }
+                tmp = lpx + (r * (intskip - intoffpar) * s); tmp2 = lpy + (r * (intskip - intoffpar) * c);
+                while ((tmp < short.MinValue || tmp2 < short.MinValue || tmp > short.MaxValue || tmp2 > short.MaxValue) && tmp < Right && tmp2 < Bottom)
+                {
+                    tmp += r * intskip * s; tmp2 += r * intskip * c;
+                }
+                while (tmp < Right && tmp2 < Bottom)
+                {
+                    p1.X = (short)tmp; p1.Y = (short)tmp2;
+                    drawer.DrawGridIntersect(gridPointColor, Transform.ToScreenPoint(p1));
+                    tmp += r * intskip * s; tmp2 += r * intskip * c;
+                }
             }
 
-            /*** end custom grid code ***/
+            lpx += r * c; lpy -= r * s;
+        }
+
+        /*** end custom grid code ***/
+    }
+
+
+    void DrawLine(Line line)
+    {
+        var p1 = Level.Endpoints[line.EndpointIndexes[0]];
+        var p2 = Level.Endpoints[line.EndpointIndexes[1]];
+
+        var color = solidLineColor;
+        if (Selection.Line != -1 && line == Level.Lines[Selection.Line])
+        {
+            color = selectedLineColor;
+        }
+        else if (line.Transparent)
+        {
+            color = transparentLineColor;
+        }
+        else if (line.Solid && line.ClockwisePolygonOwner != -1 && line.CounterclockwisePolygonOwner != -1)
+        {
+            var poly1 = Level.Polygons[line.ClockwisePolygonOwner];
+            var poly2 = Level.Polygons[line.CounterclockwisePolygonOwner];
+            if (poly1.FloorHeight != poly2.FloorHeight)
+            {
+                color = impassableLineColor;
+            }
         }
 
 
-        void DrawLine(Line line)
+        if (IsPolyVisible(line.ClockwisePolygonOwner))
         {
-            Point p1 = Level.Endpoints[line.EndpointIndexes[0]];
-            Point p2 = Level.Endpoints[line.EndpointIndexes[1]];
-
-            Drawer.Color color = solidLineColor;
-            if (Selection.Line != -1 && line == Level.Lines[Selection.Line])
-            {
-                color = selectedLineColor;
-            }
-            else if (line.Transparent)
-            {
-                color = transparentLineColor;
-            }
-            else if (line.Solid && line.ClockwisePolygonOwner != -1 && line.CounterclockwisePolygonOwner != -1)
-            {
-                Polygon poly1 = Level.Polygons[line.ClockwisePolygonOwner];
-                Polygon poly2 = Level.Polygons[line.CounterclockwisePolygonOwner];
-                if (poly1.FloorHeight != poly2.FloorHeight)
-                {
-                    color = impassableLineColor;
-                }
-            }
-
             drawer.DrawLine(color, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
         }
+    }
 
 
     enum PolygonColor
@@ -592,11 +641,11 @@ namespace Weland
         Destination
     }
 
-    void DrawPolygon(short polygon_index, PolygonColor color)
+    void DrawPolygon(short polygon_index, PolygonColor color, Drawer.Color? layerColour = null)
     {
-        Polygon polygon = Level.Polygons[polygon_index];
-        List<Drawer.Point> points = new List<Drawer.Point>();
-        for (int i = 0; i < polygon.VertexCount; ++i)
+        var polygon = Level.Polygons[polygon_index];
+        List<Drawer.Point> points = [];
+        for (var i = 0; i < polygon.VertexCount; ++i)
         {
             points.Add(Transform.ToScreenPoint(Level.Endpoints[polygon.EndpointIndexes[i]]));
         }
@@ -646,6 +695,11 @@ namespace Weland
         }
         else
         {
+            if (layerColour != null && color != PolygonColor.Selected)
+            {
+                drawer.FillPolygon(layerColour.Value, points);
+                return;
+            }
             if (color == PolygonColor.Selected)
             {
                 drawer.FillPolygon(selectedPolygonColor, points);
@@ -666,24 +720,26 @@ namespace Weland
 
         if (Mode == DrawMode.Draw && polygon.Type == PolygonType.Platform)
         {
-            Drawer.Point center = Transform.ToScreenPoint(Level.PolygonCenter(polygon));
-            Layout layout = new Pango.Layout(this.PangoContext);
+            var center = Transform.ToScreenPoint(Level.PolygonCenter(polygon));
+            var layout = new Pango.Layout(this.PangoContext);
             layout.SetMarkup(String.Format("{0}", polygon_index));
             int width, height;
             layout.GetPixelSize(out width, out height);
-            this.GdkWindow.DrawLayout(this.Style.TextGC(Gtk.StateType.Normal), (int)center.X - width / 2, (int)center.Y - height / 2, layout);
+            this.GdkWindow.DrawLayout(this.Style.TextGC(Gtk.StateType.Normal), (int)center.X - (width / 2), (int)center.Y - (height / 2), layout);
         }
     }
 
     void DrawTriangle(Drawer.Color c, double X, double Y, double angle, bool highlight, bool invisible)
     {
-        double rads = angle * Math.PI / 180;
-        List<Drawer.Point> points = new List<Drawer.Point>();
-        points.Add(new Drawer.Point(X + 8 * Math.Cos(rads), Y + 8 * Math.Sin(rads)));
-        points.Add(new Drawer.Point(X + 10 * Math.Cos(rads + 2 * Math.PI * 0.4), Y + 10 * Math.Sin(rads + 2 * Math.PI * 0.4)));
-        points.Add(new Drawer.Point(X + 10 * Math.Cos(rads - 2 * Math.PI * 0.4), Y + 10 * Math.Sin(rads - 2 * Math.PI * 0.4)));
+        var rads = angle * Math.PI / 180;
+        List<Drawer.Point> points =
+        [
+            new Drawer.Point(X + (8 * Math.Cos(rads)), Y + (8 * Math.Sin(rads))),
+        new Drawer.Point(X + (10 * Math.Cos(rads + (2 * Math.PI * 0.4))), Y + (10 * Math.Sin(rads + (2 * Math.PI * 0.4)))),
+        new Drawer.Point(X + (10 * Math.Cos(rads - (2 * Math.PI * 0.4))), Y + (10 * Math.Sin(rads - (2 * Math.PI * 0.4)))),
+    ];
 
-        Drawer.Color stroke = new Drawer.Color(0, 0, 0);
+        var stroke = new Drawer.Color(0, 0, 0);
         if (highlight)
         {
             drawer.FillStrokePolygon(stroke, c, points, invisible);
@@ -697,20 +753,22 @@ namespace Weland
 
     void DrawImage(Gdk.Pixbuf image, double X, double Y, bool highlight)
     {
-        int x = (int)X - image.Width / 2;
-        int y = (int)Y - image.Height / 2;
+        var x = (int)X - (image.Width / 2);
+        var y = (int)Y - (image.Height / 2);
 #if !SYSTEM_DRAWING
         if (drawer is CairoDrawer)
         {
-            Cairo.Context context = ((CairoDrawer)drawer).Context;
+            var context = ((CairoDrawer)drawer).Context;
 
             if (highlight)
             {
-                List<Drawer.Point> points = new List<Drawer.Point>();
-                points.Add(new Drawer.Point(x - 2.5, y - 2.5));
-                points.Add(new Drawer.Point(x + image.Width + 1.5, y - 2.5));
-                points.Add(new Drawer.Point(x + image.Width + 1.5, y + image.Height + 1.5));
-                points.Add(new Drawer.Point(x - 2.5, y + image.Height + 1.5));
+                List<Drawer.Point> points =
+                [
+                    new Drawer.Point(x - 2.5, y - 2.5),
+                new Drawer.Point(x + image.Width + 1.5, y - 2.5),
+                new Drawer.Point(x + image.Width + 1.5, y + image.Height + 1.5),
+                new Drawer.Point(x - 2.5, y + image.Height + 1.5),
+            ];
                 drawer.FillPolygon(new Drawer.Color(1, 1, 0), points);
             }
 
@@ -724,15 +782,15 @@ namespace Weland
 #endif
             if (highlight)
             {
-                Gdk.GC gc = new Gdk.GC(GdkWindow);
-                Gdk.Pixmap mask = new Gdk.Pixmap(null, image.Width, image.Height, 1);
+                var gc = new Gdk.GC(GdkWindow);
+                var mask = new Gdk.Pixmap(null, image.Width, image.Height, 1);
                 image.RenderThresholdAlpha(mask, 0, 0, 0, 0, -1, -1, 1);
 
                 gc.ClipMask = mask;
 
-                for (int i = -2; i <= 2; ++i)
+                for (var i = -2; i <= 2; ++i)
                 {
-                    for (int j = -2; j <= 2; ++j)
+                    for (var j = -2; j <= 2; ++j)
                     {
                         gc.SetClipOrigin(x + i, y + j);
                         gc.RgbFgColor = new Gdk.Color(255, 255, 0);
@@ -815,9 +873,9 @@ namespace Weland
 
     void DrawAnnotation(Annotation note, bool selected)
     {
-        int X = (int)Transform.ToScreenX(note.X);
-        int Y = (int)Transform.ToScreenY(note.Y);
-        Layout layout = new Pango.Layout(this.PangoContext);
+        var X = (int)Transform.ToScreenX(note.X);
+        var Y = (int)Transform.ToScreenY(note.Y);
+        var layout = new Pango.Layout(this.PangoContext);
         layout.SetMarkup(note.Text);
         int width, height;
         layout.GetPixelSize(out width, out height);
@@ -834,10 +892,12 @@ namespace Weland
 
     Drawer.Color LoadColor(string xPath, Drawer.Color defaultColor)
     {
-        Drawer.Color c;
-        c.R = Weland.Settings.GetSetting(xPath + "/Red", defaultColor.R);
-        c.G = Weland.Settings.GetSetting(xPath + "/Green", defaultColor.G);
-        c.B = Weland.Settings.GetSetting(xPath + "/Blue", defaultColor.B);
+        var c = new Drawer.Color
+        {
+            R = Weland.Settings.GetSetting(xPath + "/Red", defaultColor.R),
+            G = Weland.Settings.GetSetting(xPath + "/Green", defaultColor.G),
+            B = Weland.Settings.GetSetting(xPath + "/Blue", defaultColor.B)
+        };
 
         return c;
     }
@@ -920,5 +980,4 @@ namespace Weland
         SaveColor(colorsPrefix + "Monster", monsterColor);
         SaveColor(colorsPrefix + "Civilian", civilianColor);
     }
-}
 }

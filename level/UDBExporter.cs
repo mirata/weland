@@ -1,7 +1,10 @@
 using System;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Cairo;
 using Gdk;
+using Gtk;
 using static Weland.Side;
 
 namespace Weland;
@@ -171,6 +174,29 @@ public class UDBExporter
         this.level = level;
     }
 
+    private double GetLayerXOffset(int layer)
+    {
+        if (layer == 2 || layer == 3)
+        {
+            return -detachedOffset;
+        }
+        return 0;
+    }
+
+    private double GetLayerYOffset(int layer)
+    {
+        if (layer == 3 || layer == 4)
+        {
+            return detachedOffset;
+        }
+        return 0;
+    }
+
+    private List<int> GetLayersForPoly(int i)
+    {
+        return Level.PolygonLayers.ContainsKey((short)i) ? Level.PolygonLayers[(short)i] : [1];
+    }
+
     public void Export(string path)
     {
         var scriptPath = System.IO.Path.ChangeExtension(path, ".acs");
@@ -240,6 +266,8 @@ public class UDBExporter
         }
 
         var controlledLightIndexes = initialisedLights.Concat(activatedLights).ToHashSet();
+        var scriptCalls = new HashSet<string>();
+        var scripts = new HashSet<string>();
 
         for (short index = 0; index < level.Polygons.Count; index++)
         {
@@ -344,6 +372,7 @@ public class UDBExporter
 
                 if (side != null)
                 {
+                    lineIndex = side.LineIndex;
                     if (adjacentPolygon != null)
                     {
                         var floorRoundingOffset = CalculateFloorRoundingOffset(p, adjacentPolygon);
@@ -371,8 +400,19 @@ public class UDBExporter
                         }
                         else if (side.Type == SideType.Low)
                         {
-                            var platformOffset = adjacentPlatform != null ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight + floorRoundingOffset : floorRoundingOffset;
-                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)platformOffset), true);
+                            double platformOffset = 0;
+                            if (adjacentPlatform != null)
+                            {
+                                platformOffset = adjacentPlatform.MaximumHeight - floorHeight - (adjacentPlatform.MaximumHeight - p.FloorHeight);
+                                if (adjacentPlatform.MaximumHeight > p.CeilingHeight)
+                                {
+                                    platformOffset += adjacentPlatform.MaximumHeight - adjacentPolygon.CeilingHeight;
+                                }
+                            }
+
+                            var floor = platformOffset + floorRoundingOffset;
+
+                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)floor), true);
                         }
                         else if (side.Type == SideType.Full)
                         {
@@ -386,7 +426,6 @@ public class UDBExporter
 
                     if (side.IsControlPanel)
                     {
-                        lineIndex = side.LineIndex;
                         controlPanelClassValue = side.ControlPanelClassValue().ToString();
                         var active = false;
                         if (side.IsLightSwitch())
@@ -403,7 +442,7 @@ public class UDBExporter
 
                         if (middle != null)
                         {
-                            SetSwitchTexture(middle, active);
+                            SetSwitchActiveTextureState(middle, side, active);
                         }
                     }
                 }
@@ -415,7 +454,7 @@ public class UDBExporter
                 var start = level.Endpoints[line.EndpointIndexes[0]];
                 var end = level.Endpoints[line.EndpointIndexes[1]];
 
-                lines.Add(new UdbLine
+                var udbLine = new UdbLine
                 {
                     Start = new UdbVector
                     {
@@ -435,47 +474,85 @@ public class UDBExporter
                     TriggerPlatformIndex = triggerPlatformIndex,
                     ControlPanelClassValue = controlPanelClassValue,
                     LineIndex = lineIndex
-                });
-            }
+                };
 
-            if (Level.DetachedPolygonIndexes.Contains(index))
-            {
-                lines.ForEach(l =>
+                lines.Add(udbLine);
+
+                if (controlPanelClassValue == "PatternBuffer")
                 {
-                    l.Start.X -= detachedOffset;
-                    l.End.X -= detachedOffset;
-                    l.Start.Y += detachedOffset;
-                    l.End.Y += detachedOffset;
-                });
-            }
-
-            var sector = new UdbSector
-            {
-                Index = index,
-                FloorHeight = Math.Round(ConvertUnit(floorHeight)),
-                CeilingHeight = Math.Round(ConvertUnit(ceilingHeight)),
-                FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
-                CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
-                Platform = GetUdbPlatform(platform),
-                Lines = lines,
-                LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null
-            };
-
-            map.Sectors.Add(sector);
-
-            var center = GetCenter(lines);
-
-            if (lightSwitchMapInfos.ContainsKey(index))
-            {
-                map.Things.Add(new UdbThing
+                    scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Save"", 0);");
+                    scripts.Add($@"script ""Save{udbLine.LineIndex}Toggle"" (void)
+{{
+	ScriptCall(""HealTerminal"", ""Activate"", {udbLine.LineIndex});
+}}
+");
+                }
+                else if (controlPanelClassValue == "Oxygen")
                 {
-                    X = center.X,
-                    Y = center.Y,
-                    Angle = 0,
-                    Type = 9001,
-                    TagId = lightSwitchMapInfos[index]
-                });
+                    scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Oxygen"", 0);");
+                    scripts.Add($@"script ""Oxygen{udbLine.LineIndex}Toggle"" (void)
+{{
+	ScriptCall(""HealTerminal"", ""Toggle"", {udbLine.LineIndex});
+}}
+");
+                }
+                else if (controlPanelClassValue == "Shield" || controlPanelClassValue == "DoubleShield" || controlPanelClassValue == "TripleShield")
+                {
+                    var factor = controlPanelClassValue == "TripleShield" ? 3 : controlPanelClassValue == "DoubleShield" ? 2 : 1;
+                    scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Shield"", {factor});");
+                    scripts.Add($@"script ""Shield{udbLine.LineIndex}Toggle"" (void)
+{{
+	ScriptCall(""HealTerminal"", ""Toggle"", {udbLine.LineIndex});
+}}
+");
+                }
+                else if (controlPanelClassValue == "Terminal")
+                {
+                    //scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Save"", 0);");
+                }
             }
+
+            var layers = GetLayersForPoly(index);
+
+            foreach (var layer in layers)
+            {
+                var layerSector = new UdbSector
+                {
+                    Index = index,
+                    Layer = layer,
+                    FloorHeight = Math.Round(ConvertUnit(floorHeight)),
+                    CeilingHeight = Math.Round(ConvertUnit(ceilingHeight)),
+                    FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
+                    CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
+                    Platform = GetUdbPlatform(platform),
+                    Lines = JsonClone(lines),
+                    LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null
+                };
+
+                layerSector.Lines.ForEach(l =>
+                {
+                    l.Start.X += GetLayerXOffset(layer);
+                    l.End.X += GetLayerXOffset(layer);
+                    l.Start.Y += GetLayerYOffset(layer);
+                    l.End.Y += GetLayerYOffset(layer);
+                });
+
+                map.Sectors.Add(layerSector);
+            }
+
+            //var center = GetCenter(lines);
+
+            //if (lightSwitchMapInfos.ContainsKey(index))
+            //{
+            //    map.Things.Add(new UdbThing
+            //    {
+            //        X = center.X,
+            //        Y = center.Y,
+            //        Angle = 0,
+            //        Type = 9001,
+            //        TagId = lightSwitchMapInfos[index]
+            //    });
+            //}
         }
 
         foreach (var obj in level.Objects.Where(e => !e.NetworkOnly))
@@ -600,9 +677,12 @@ const drawSector = async (polygon, debug = false) => {{
     }}
   }}
   count++;
-  //if (count % 25 === 0) {{
-    //await new Promise((resolve) => setTimeout(resolve, 10));
-  //}}
+
+  if (count % 5 === 0) {{
+    for(let i = 0; i < 100_000; i++){{
+      // Simulate work
+    }}
+  }}
 }};
 
 const addThing = (thing) => {{
@@ -787,6 +867,27 @@ Script ""InitialiseLighting"" ENTER
         acsWriter.WriteLine($@"}}
 ");
 
+
+        for (short i = 0; i < level.Platforms.Count; i++)
+        {
+            var platform = level.Platforms[i];
+            var platformId = platform.PolygonIndex;
+            acsWriter.WriteLine($@"script ""Platform{platformId}Toggle"" (void)
+{{
+	ScriptCall(""Platform"", ""Toggle"", {platformId});
+}}
+");
+            if (platform.IsDoor)
+            {
+                acsWriter.WriteLine($@"script ""Door{platformId}Touch"" (void)
+{{
+	ScriptCall(""Platform"", ""ToggleTouch"", {platformId}, GetActorClass(ActivatorTID()));
+}}
+");
+            }
+        }
+
+
         acsWriter.WriteLine($@"Script ""InitialisePolygonTypes"" ENTER
 {{");
 
@@ -838,24 +939,26 @@ Script ""InitialiseLighting"" ENTER
         acsWriter.WriteLine($@"}}
 ");
 
-        for (short i = 0; i < level.Platforms.Count; i++)
+
+        acsWriter.WriteLine($@"Script ""InitialiseTerminals"" ENTER
+{{");
+        foreach (var scriptCall in scriptCalls)
         {
-            var platform = level.Platforms[i];
-            var platformId = platform.PolygonIndex;
-            acsWriter.WriteLine($@"script ""Platform{platformId}Toggle"" (void)
-{{
-	ScriptCall(""Platform"", ""Toggle"", {platformId});
-}}
-");
-            if (platform.IsDoor)
-            {
-                acsWriter.WriteLine($@"script ""Door{platformId}Touch"" (void)
-{{
-	ScriptCall(""Platform"", ""ToggleTouch"", {platformId}, GetActorClass(ActivatorTID()));
-}}
-");
-            }
+            acsWriter.WriteLine($"    {scriptCall}");
         }
+
+        acsWriter.WriteLine($@"}}
+");
+
+        foreach (var script in scripts)
+        {
+            acsWriter.WriteLine(script);
+        }
+    }
+
+    private T JsonClone<T>(T item)
+    {
+        return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(item, JsonSerializerOptions.Web), JsonSerializerOptions.Web)!;
     }
 
     private double CalculateFloorRoundingOffset(Polygon p, Polygon adjacentPolygon)
@@ -866,19 +969,29 @@ Script ""InitialiseLighting"" ENTER
         return a - b - (Math.Round(a) - Math.Round(b));
     }
 
-    private void SetSwitchTexture(UdbTexture middle, bool active)
+    private static Regex regex = new Regex(@"^(?<num1>\d*)SET(?<num2>\d*)$", RegexOptions.Compiled);
+    private void SetSwitchActiveTextureState(UdbTexture middle, Side side, bool active)
     {
-        if (!middle.Name.Contains("SET00") && !middle.Name.Contains("SET01"))
+        var match = regex.Match(middle.Name);
+        var num1 = match.Groups["num1"].Value;
+        var num2 = match.Groups["num2"].Value;
+
+
+        if (side.IsPlatformSwitch() || side.IsLightSwitch())
         {
-            return;
+            middle.Name = active ? $"{num1}SET01" : $"{num1}SET00";
         }
-        if (active)
+
+        if (side.IsTagSwitch())
         {
-            middle.Name = middle.Name.Replace("SET01", "SET00");
-        }
-        else
-        {
-            middle.Name = middle.Name.Replace("SET00", "SET01");
+            if (num1 == "1" || num1 == "2")
+            {
+                middle.Name = active ? $"{num1}SET37" : $"{num1}SET36";
+            }
+            else if (num1 == "3")
+            {
+                middle.Name = active ? $"{num1}SET36" : $"{num1}SET35";
+            }
         }
     }
 
@@ -941,7 +1054,7 @@ Script ""InitialiseLighting"" ENTER
             Angle = 360.0 - obj.Facing
         };
 
-        if (Level.DetachedPolygonIndexes.Contains(obj.PolygonIndex))
+        if (Level.PolygonLayers.ContainsKey(obj.PolygonIndex))
         {
             t.X -= detachedOffset;
             t.Y += detachedOffset;
@@ -1221,14 +1334,14 @@ Script ""InitialiseLighting"" ENTER
     }
 }
 
-public class UdbLevel
+public record UdbLevel
 {
     public List<UdbSector> Sectors { get; set; } = [];
     public List<UdbLight> Lights { get; set; } = [];
     public List<UdbThing> Things { get; set; } = [];
 }
 
-public class UdbLight
+public record UdbLight
 {
     public int Index { get; set; }
     public bool InitiallyActive { get; set; }
@@ -1240,7 +1353,7 @@ public class UdbLight
     public required UdbLightState BecomingInactive { get; set; }
 }
 
-public class UdbLightState
+public record UdbLightState
 {
     public required string Function { get; set; }
     public short Intensity { get; set; }
@@ -1249,9 +1362,10 @@ public class UdbLightState
     public short DeltaPeriod { get; set; }
 }
 
-public class UdbSector
+public record UdbSector
 {
     public int Index { get; set; }
+    public int Layer { get; set; }
     public double FloorHeight { get; set; }
     public double CeilingHeight { get; set; }
     public required UdbTexture FloorTexture { get; set; }
@@ -1261,7 +1375,7 @@ public class UdbSector
     public List<UdbLine> Lines { get; set; } = [];
 }
 
-public class UdbPlatform
+public record UdbPlatform
 {
     public double MaxHeight { get; set; }
     public double MinHeight { get; set; }
@@ -1277,7 +1391,7 @@ public class UdbPlatform
     public string? TouchScript { get; set; }
 }
 
-public class UdbLine
+public record UdbLine
 {
     public required UdbVector Start { get; set; }
     public required UdbVector End { get; set; }
@@ -1291,13 +1405,13 @@ public class UdbLine
     public int? LineIndex { get; set; }
 }
 
-public class UdbVector
+public record UdbVector
 {
     public double X { get; set; }
     public double Y { get; set; }
 }
 
-public class UdbTexture
+public record UdbTexture
 {
     public required string Name { get; set; }
     public double X { get; set; }
@@ -1306,7 +1420,7 @@ public class UdbTexture
     public int LightIndex { get; set; }
 }
 
-public class UdbThing
+public record UdbThing
 {
     public int Type { get; set; }
     public double X { get; set; }
