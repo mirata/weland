@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using weland.level;
 
 namespace Weland;
 public delegate bool PolygonFilter(Polygon p);
@@ -16,7 +17,7 @@ public partial class Level
     public static bool FilterPoints = false;
     public static bool RememberDeletedSides = false;
 
-    public static Dictionary<short, List<int>> PolygonLayers = [];
+    public static LevelAttributes Attributes = new LevelAttributes();
     public static int? VisibleLayer = null;
 
     Dictionary<short, Side> ClockwiseOrphanedSides = [];
@@ -932,20 +933,28 @@ public partial class Level
 
     public void TogglePolygonLayer(short index, int layer)
     {
-        if (PolygonLayers.ContainsKey(index))
+        if (Attributes.PolygonLayers.ContainsKey(index))
         {
-            if (PolygonLayers[index].Contains(layer))
+            if (Attributes.PolygonLayers[index].Contains(layer))
             {
-                PolygonLayers[index].Remove(layer);
+                Attributes.PolygonLayers[index].Remove(layer);
             }
             else
             {
-                PolygonLayers[index].Add(layer);
+                Attributes.PolygonLayers[index].Add(layer);
             }
         }
         else
         {
-            PolygonLayers[index] = [layer];
+            Attributes.PolygonLayers[index] = [layer];
+        }
+    }
+
+    public void ClearPolygonLayers(short index)
+    {
+        if (Attributes.PolygonLayers.ContainsKey(index))
+        {
+            Attributes.PolygonLayers.Remove(index);
         }
     }
 

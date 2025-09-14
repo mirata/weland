@@ -8,6 +8,7 @@ using System.Text.Json;
 using Gdk;
 using Glade;
 using Gtk;
+using weland;
 using weland.level;
 
 namespace Weland;
@@ -915,10 +916,17 @@ public partial class MapWindow
                 break;
             case Gdk.Key.Key_1:
                 editor.Layer(1);
+                editor.TogglePortalLine();
                 UpdateInspector();
                 UpdateStatusBar();
                 Redraw();
                 break;
+            case Gdk.Key.Key_0:
+                editor.ClearLayer();
+                editor.FlipPortalLine();
+                UpdateInspector();
+                UpdateStatusBar();
+                Redraw();
                 break;
             case Gdk.Key.numbersign:
                 showGridButton.Active = !showGridButton.Active;
@@ -1051,11 +1059,11 @@ public partial class MapWindow
     {
         if (CheckSave())
         {
-            AllLevelAttributes[LevelIndex] = new LevelAttributes { PolygonLayers = new Dictionary<short, List<int>>(Level.PolygonLayers) };
+            AllLevelAttributes[LevelIndex] = Level.Attributes.JsonClone();
             Level = new Level();
             Level.Load(mapfile.Directory[n]);
             LevelIndex = n;
-            SetPolygonLayers();
+            SetAttributes();
             selection.Clear();
             editor.ClearUndo();
             Center(0, 0);
@@ -1068,9 +1076,9 @@ public partial class MapWindow
         }
     }
 
-    private void SetPolygonLayers()
+    private void SetAttributes()
     {
-        Level.PolygonLayers = AllLevelAttributes.ContainsKey(LevelIndex) ? AllLevelAttributes[LevelIndex]?.PolygonLayers ?? [] : [];
+        Level.Attributes = AllLevelAttributes.ContainsKey(LevelIndex) ? AllLevelAttributes[LevelIndex] ?? new() : new();
     }
 
     public void OpenFile(string filename)
@@ -1138,7 +1146,7 @@ public partial class MapWindow
                     {
                         AllLevelAttributes = [];
                     }
-                    SetPolygonLayers();
+                    SetAttributes();
                 }
             }
             d.Destroy();
@@ -1304,7 +1312,7 @@ public partial class MapWindow
         {
             if (d.Run() == (int)ResponseType.Accept)
             {
-                var exporter = new UDBExporter(Level);
+                var exporter = new UDBExporter(Level, LevelIndex);
                 exporter.Export(d.Filename);
 
                 //Weland.Settings.PutSetting("LastSave/Folder", Path.GetDirectoryName(d.Filename));

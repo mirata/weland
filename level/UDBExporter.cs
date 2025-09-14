@@ -1,10 +1,13 @@
 using System;
+using System.Numerics;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cairo;
 using Gdk;
 using Gtk;
+using weland;
 using static Weland.Side;
 
 namespace Weland;
@@ -168,10 +171,12 @@ public class UDBExporter
     ];
 
     Level level;
+    int levelIndex;
 
-    public UDBExporter(Level level)
+    public UDBExporter(Level level, int levelIndex)
     {
         this.level = level;
+        this.levelIndex = levelIndex;
     }
 
     private double GetLayerXOffset(int layer)
@@ -194,7 +199,7 @@ public class UDBExporter
 
     private List<int> GetLayersForPoly(int i)
     {
-        return Level.PolygonLayers.ContainsKey((short)i) ? Level.PolygonLayers[(short)i] : [1];
+        return Level.Attributes.PolygonLayers.ContainsKey((short)i) ? Level.Attributes.PolygonLayers[(short)i] : [1];
     }
 
     public void Export(string path)
@@ -305,24 +310,37 @@ public class UDBExporter
             var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
             var floorHeight = p.FloorHeight;
             var ceilingHeight = p.CeilingHeight;
+
             if (platform != null)
             {
+                var minFloor = platform.MinimumHeight;
+                var maxFloor = platform.MaximumHeight;
+                var minCeiling = platform.MinimumHeight;
+                var maxCeiling = platform.MaximumHeight;
+
+                if (platform.ComesFromFloor && platform.ComesFromCeiling)
+                {
+                    maxFloor = (short)(platform.MinimumHeight + ((platform.MaximumHeight - platform.MinimumHeight) / 2));
+                    minCeiling = (short)(platform.MinimumHeight + ((platform.MaximumHeight - platform.MinimumHeight) / 2));
+                }
+
                 if (platform.ComesFromCeiling)
                 {
                     if (platform.InitiallyExtended)
                     {
-                        ceilingHeight = Math.Max(p.FloorHeight, platform.MinimumHeight);
+                        ceilingHeight = minCeiling;
                     }
                     else if (platform.MinimumHeight < p.CeilingHeight)
                     {
                         ceilingHeight = Math.Max(p.FloorHeight, platform.MinimumHeight);
                     }
                 }
+
                 if (platform.ComesFromFloor)
                 {
                     if (platform.InitiallyExtended)
                     {
-                        floorHeight = Math.Min(p.CeilingHeight, platform.MaximumHeight);
+                        floorHeight = maxFloor;
                     }
                     //else if (platform.MaximumHeight > p.FloorHeight)
                     //{
@@ -339,10 +357,11 @@ public class UDBExporter
 
             for (var i = 0; i < p.VertexCount; ++i)
             {
+                var lineIndex = p.LineIndexes[i];
                 var pointStart = level.Endpoints[p.EndpointIndexes[i]];
                 var pointEnd = level.Endpoints[p.EndpointIndexes[i == p.VertexCount - 1 ? 0 : i + 1]];
-                var line = level.Lines[p.LineIndexes[i]];
-                var side = level.Sides.FirstOrDefault(e => e.LineIndex == p.LineIndexes[i] && e.PolygonIndex == index);// p.SideIndexes[i] > -1 && p.SideIndexes[i] < level.Sides.Count ? level.Sides[p.SideIndexes[i]] : null;
+                var line = level.Lines[lineIndex];
+                var side = level.Sides.FirstOrDefault(e => e.LineIndex == lineIndex && e.PolygonIndex == index);// p.SideIndexes[i] > -1 && p.SideIndexes[i] < level.Sides.Count ? level.Sides[p.SideIndexes[i]] : null;
                 var adjacentPolyIndex = p.AdjacentPolygonIndexes[i];
                 //fallback as sometimes polyindexes are invalid. get the line and associates owners
                 if (adjacentPolyIndex > -1 && adjacentPolyIndex >= level.Polygons.Count)
@@ -368,11 +387,9 @@ public class UDBExporter
                 int? triggerLightIndex = null;
                 int? triggerPlatformIndex = null;
                 string? controlPanelClassValue = null;
-                int? lineIndex = null;
 
                 if (side != null)
                 {
-                    lineIndex = side.LineIndex;
                     if (adjacentPolygon != null)
                     {
                         var floorRoundingOffset = CalculateFloorRoundingOffset(p, adjacentPolygon);
@@ -382,8 +399,25 @@ public class UDBExporter
                         //however for marathon floor platforms, the offset is relative to the min and max height, and then anchors top left
                         if (side.Type == SideType.Split)
                         {
-                            var upperPlatformOffset = adjacentPlatform != null && adjacentPlatform.ComesFromCeiling ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight : 0;
-                            var lowerPlatformOffset = adjacentPlatform != null && adjacentPlatform.ComesFromFloor ? adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight - p.FloorHeight : 0;
+                            var upperPlatformOffset = 0;
+                            var lowerPlatformOffset = 0;
+
+                            if (adjacentPlatform != null)
+                            {
+                                var minFloor = adjacentPlatform.MinimumHeight;
+                                var maxFloor = adjacentPlatform.MaximumHeight;
+                                var minCeiling = adjacentPlatform.MinimumHeight;
+                                var maxCeiling = adjacentPlatform.MaximumHeight;
+
+                                if (adjacentPlatform.ComesFromFloor && adjacentPlatform.ComesFromCeiling)
+                                {
+                                    maxFloor = (short)(adjacentPlatform.MinimumHeight + ((adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight) / 2));
+                                    minCeiling = (short)(adjacentPlatform.MinimumHeight + ((adjacentPlatform.MaximumHeight - adjacentPlatform.MinimumHeight) / 2));
+                                }
+
+                                upperPlatformOffset = adjacentPlatform.ComesFromCeiling ? maxCeiling - minCeiling : 0;
+                                lowerPlatformOffset = adjacentPlatform.ComesFromFloor ? minFloor - p.FloorHeight : 0;
+                            }
 
                             var fromFloor = adjacentPlatform?.ComesFromFloor ?? false;
                             var fromCeiling = adjacentPlatform?.ComesFromCeiling ?? false;
@@ -403,7 +437,6 @@ public class UDBExporter
                             double platformOffset = 0;
                             if (adjacentPlatform != null)
                             {
-                                platformOffset = adjacentPlatform.MaximumHeight - floorHeight - (adjacentPlatform.MaximumHeight - p.FloorHeight);
                                 if (adjacentPlatform.MaximumHeight > p.CeilingHeight)
                                 {
                                     platformOffset += adjacentPlatform.MaximumHeight - adjacentPolygon.CeilingHeight;
@@ -444,6 +477,46 @@ public class UDBExporter
                         {
                             SetSwitchActiveTextureState(middle, side, active);
                         }
+
+                        var safeLineIndex = lineIndex + 2000;
+
+                        if (controlPanelClassValue == "PatternBuffer")
+                        {
+                            scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {safeLineIndex}, ""Save"", 0);");
+                            scripts.Add($@"script ""Save{lineIndex}Interact"" (void)
+{{
+	ScriptCall(""HealTerminal"", ""Interact"", {safeLineIndex});
+}}
+");
+                        }
+                        else if (controlPanelClassValue == "Oxygen")
+                        {
+                            scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {safeLineIndex}, ""Oxygen"", 0);");
+                            scripts.Add($@"script ""Oxygen{lineIndex}Interact"" (void)
+{{
+	ScriptCall(""HealTerminal"", ""Interact"", {safeLineIndex});
+}}
+");
+                        }
+                        else if (controlPanelClassValue == "Shield" || controlPanelClassValue == "DoubleShield" || controlPanelClassValue == "TripleShield")
+                        {
+                            var factor = controlPanelClassValue == "TripleShield" ? 3 : controlPanelClassValue == "DoubleShield" ? 2 : 1;
+                            scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {safeLineIndex}, ""Health"", {factor});");
+                            scripts.Add($@"script ""Shield{lineIndex}Interact"" (void)
+{{
+	ScriptCall(""HealTerminal"", ""Interact"", {safeLineIndex});
+}}
+");
+                        }
+                        else if (controlPanelClassValue == "Terminal")
+                        {
+                            scriptCalls.Add($@"ScriptCall(""Terminal"", ""Init"", {safeLineIndex}, {levelIndex}, {side.ControlPanelPermutation});");
+                            scripts.Add($@"script ""Terminal{lineIndex}Interact"" (void)
+{{
+	ScriptCall(""Terminal"", ""Interact"", {safeLineIndex});
+}}
+");
+                        }
                     }
                 }
                 else
@@ -473,43 +546,11 @@ public class UDBExporter
                     TriggerLightIndex = triggerLightIndex,
                     TriggerPlatformIndex = triggerPlatformIndex,
                     ControlPanelClassValue = controlPanelClassValue,
-                    LineIndex = lineIndex
+                    LineIndex = lineIndex,
+                    Portal = Level.Attributes.PortalLines.ContainsKey(lineIndex) ? Level.Attributes.PortalLines[lineIndex] : null
                 };
 
                 lines.Add(udbLine);
-
-                if (controlPanelClassValue == "PatternBuffer")
-                {
-                    scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Save"", 0);");
-                    scripts.Add($@"script ""Save{udbLine.LineIndex}Toggle"" (void)
-{{
-	ScriptCall(""HealTerminal"", ""Activate"", {udbLine.LineIndex});
-}}
-");
-                }
-                else if (controlPanelClassValue == "Oxygen")
-                {
-                    scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Oxygen"", 0);");
-                    scripts.Add($@"script ""Oxygen{udbLine.LineIndex}Toggle"" (void)
-{{
-	ScriptCall(""HealTerminal"", ""Toggle"", {udbLine.LineIndex});
-}}
-");
-                }
-                else if (controlPanelClassValue == "Shield" || controlPanelClassValue == "DoubleShield" || controlPanelClassValue == "TripleShield")
-                {
-                    var factor = controlPanelClassValue == "TripleShield" ? 3 : controlPanelClassValue == "DoubleShield" ? 2 : 1;
-                    scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Shield"", {factor});");
-                    scripts.Add($@"script ""Shield{udbLine.LineIndex}Toggle"" (void)
-{{
-	ScriptCall(""HealTerminal"", ""Toggle"", {udbLine.LineIndex});
-}}
-");
-                }
-                else if (controlPanelClassValue == "Terminal")
-                {
-                    //scriptCalls.Add($@"ScriptCall(""HealTerminal"", ""Init"", {udbLine.LineIndex}, ""Save"", 0);");
-                }
             }
 
             var layers = GetLayersForPoly(index);
@@ -525,7 +566,7 @@ public class UDBExporter
                     FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
                     CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
                     Platform = GetUdbPlatform(platform),
-                    Lines = JsonClone(lines),
+                    Lines = lines.JsonClone(),
                     LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null
                 };
 
@@ -539,29 +580,21 @@ public class UDBExporter
 
                 map.Sectors.Add(layerSector);
             }
-
-            //var center = GetCenter(lines);
-
-            //if (lightSwitchMapInfos.ContainsKey(index))
-            //{
-            //    map.Things.Add(new UdbThing
-            //    {
-            //        X = center.X,
-            //        Y = center.Y,
-            //        Angle = 0,
-            //        Type = 9001,
-            //        TagId = lightSwitchMapInfos[index]
-            //    });
-            //}
         }
 
         foreach (var obj in level.Objects.Where(e => !e.NetworkOnly))
         {
-            var thing = GetUdbThing(obj);
-            if (thing != null)
+            var layers = GetLayersForPoly(obj.PolygonIndex);
+
+            foreach (var layer in layers)
             {
-                map.Things.Add(thing);
+                var thing = GetUdbThing(obj, layer);
+                if (thing != null)
+                {
+                    map.Things.Add(thing);
+                }
             }
+
         }
 
         //lightabsolute_bottom, lightabsolute_mid, lightabsolute_top, lightabsolute, light, light_top, light_mid, light_bottom
@@ -646,7 +679,7 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.action = 80;
         l.line.flags.repeatspecial = true;
         l.line.flags.playeruse = true;
-        l.line.fields.arg0str = `Save${{sectorLine.lineIndex}}Toggle`;
+        l.line.fields.arg0str = `Save${{sectorLine.lineIndex}}Interact`;
         l.line.tag = 2000 + sectorLine.lineIndex;
       }} 
 
@@ -654,7 +687,7 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.action = 80;
         l.line.flags.repeatspecial = true;
         l.line.flags.playeruse = true;
-        l.line.fields.arg0str = `Oxygen${{sectorLine.lineIndex}}Toggle`;
+        l.line.fields.arg0str = `Oxygen${{sectorLine.lineIndex}}Interact`;
         l.line.tag = 2000 + sectorLine.lineIndex;
       }}
 
@@ -662,7 +695,7 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.action = 80;
         l.line.flags.repeatspecial = true;
         l.line.flags.playeruse = true;
-        l.line.fields.arg0str = `Shield${{sectorLine.lineIndex}}Toggle`;
+        l.line.fields.arg0str = `Shield${{sectorLine.lineIndex}}Interact`;
         l.line.tag = 2000 + sectorLine.lineIndex;
       }}
 
@@ -670,7 +703,7 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.action = 80;
         l.line.flags.repeatspecial = true;
         l.line.flags.playeruse = true;
-        l.line.fields.arg0str = `Terminal${{sectorLine.lineIndex}}Toggle`;
+        l.line.fields.arg0str = `Terminal${{sectorLine.lineIndex}}Interact`;
         l.line.tag = 2000 + sectorLine.lineIndex;
       }}
       allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector: polygon }});
@@ -768,7 +801,12 @@ const applySectorChanges = () => {{
         const line = sidedef.line;
         if(line.front?.sector && line.back?.sector?.index !== sector.index){{
           line.flip();
+        }} 
+
+        if(!line.back || !line.front) {{
+            line.flags[""dontpegbottom""] = true;
         }}
+
         if (line.front && sidedef.line.back) {{
           line.action = 80;
           line.flags.repeatspecial = true;
@@ -780,6 +818,50 @@ const applySectorChanges = () => {{
   }}
 }};
 
+const createPortal = (start, end, flipped) => {{
+  if (flipped) {{
+    end.flip();
+  }} else {{
+    start.flip();
+  }}
+
+  if (start.tag === 0) {{
+    start.tag = UDB.Map.getNewTag();
+  }}
+
+  if (end.tag === 0) {{
+    end.tag = UDB.Map.getNewTag();
+  }}
+
+  start.action = 156;
+  start.args[0] = end.tag;
+  start.args[2] = 3;
+
+  end.action = 156;
+  end.args[0] = start.tag;
+  end.args[2] = 3;
+}};
+
+const addPortals = () => {{
+  const portals = {{}};
+  for (const sl of allSectorLines) {{
+    const {{ sideIndex, sectorLine, sector }} = sl;
+    if (sectorLine.portal !== null) {{
+      if (!portals[sectorLine.lineIndex]) {{
+        portals[sectorLine.lineIndex] = [];
+      }}
+      portals[sectorLine.lineIndex].push({{ sideIndex, sectorLine, sector }});
+    }}
+  }}
+
+  for(const [lineIndex, portalLines] of Object.entries(portals)) {{
+    if(portalLines.length >= 2) {{
+      const start =  UDB.Map.getSidedefs()[portalLines[0].sideIndex];
+      const end =  UDB.Map.getSidedefs()[portalLines[1].sideIndex];
+      createPortal(start.line, end.line, portalLines[0].sectorLine.portal);
+    }}
+  }}
+}};
 
 const level = {JsonSerializer.Serialize(map, options)};
 
@@ -796,6 +878,7 @@ const create = async () => {{
 
   applySideTextures();
   applySectorChanges();
+  addPortals();
 }};
 
 create().then();
@@ -941,10 +1024,11 @@ Script ""InitialiseLighting"" ENTER
 
 
         acsWriter.WriteLine($@"Script ""InitialiseTerminals"" ENTER
-{{");
+{{
+   ScriptCall(""Terminal"", ""InitDefinitions"");");
         foreach (var scriptCall in scriptCalls)
         {
-            acsWriter.WriteLine($"    {scriptCall}");
+            acsWriter.WriteLine($"   {scriptCall}");
         }
 
         acsWriter.WriteLine($@"}}
@@ -954,11 +1038,6 @@ Script ""InitialiseLighting"" ENTER
         {
             acsWriter.WriteLine(script);
         }
-    }
-
-    private T JsonClone<T>(T item)
-    {
-        return JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(item, JsonSerializerOptions.Web), JsonSerializerOptions.Web)!;
     }
 
     private double CalculateFloorRoundingOffset(Polygon p, Polygon adjacentPolygon)
@@ -979,18 +1058,18 @@ Script ""InitialiseLighting"" ENTER
 
         if (side.IsPlatformSwitch() || side.IsLightSwitch())
         {
-            middle.Name = active ? $"{num1}SET01" : $"{num1}SET00";
+            middle.Name = active ? $"{num1}SET00" : $"{num1}SET01";
         }
 
         if (side.IsTagSwitch())
         {
             if (num1 == "1" || num1 == "2")
             {
-                middle.Name = active ? $"{num1}SET37" : $"{num1}SET36";
+                middle.Name = active ? $"{num1}SET36" : $"{num1}SET37";
             }
             else if (num1 == "3")
             {
-                middle.Name = active ? $"{num1}SET36" : $"{num1}SET35";
+                middle.Name = active ? $"{num1}SET35" : $"{num1}SET36";
             }
         }
     }
@@ -1037,7 +1116,7 @@ Script ""InitialiseLighting"" ENTER
         }
     }
 
-    private UdbThing? GetUdbThing(MapObject obj)
+    private UdbThing? GetUdbThing(MapObject obj, int layer)
     {
         var type = GetThingType(obj);
         if (type == null)
@@ -1048,17 +1127,11 @@ Script ""InitialiseLighting"" ENTER
         var t = new UdbThing
         {
             Type = type.Value,
-            X = ConvertUnit(obj.X),
-            Y = -ConvertUnit(obj.Y),
+            X = ConvertUnit(obj.X) + GetLayerXOffset(layer),
+            Y = -ConvertUnit(obj.Y) + GetLayerYOffset(layer),
             Z = ConvertUnit(obj.Z),
             Angle = 360.0 - obj.Facing
         };
-
-        if (Level.PolygonLayers.ContainsKey(obj.PolygonIndex))
-        {
-            t.X -= detachedOffset;
-            t.Y += detachedOffset;
-        }
 
         return t;
     }
@@ -1095,7 +1168,41 @@ Script ""InitialiseLighting"" ENTER
                 return 16012;
             case "Compiler Major Invisible":
                 return 16013;
+            case "Trooper Minor":
+                return 16013;
+            case "Trooper Major":
+                return 16013;
+            case "Hunter Minor":
+                return 16051;
+            case "Hunter Major":
+                return 16052;
+            case "Enforcer Minor":
+                return 16040;
+            case "Enforcer Major":
+                return 16041;
+            case "Juggernaut Minor":
+                return 17000;
+            case "Juggernaut Major":
+                return 17000;
+            case "Defender Minor":
+                return 16081;
+            case "Hummer Possessed":
+                return 16082;
+            case "Sewage Yeti":
+                return 16071;
+            case "Water Yeti":
+                return 16071;
 
+            case "Civilian Crew":
+                return 16030;
+            case "Civilian Science":
+                return 16031;
+            case "Civilian Security":
+                return 16032;
+            case "Civilian Engineering": //TODO: doesnt exist?
+                return 16033;
+            case "Civilian Assimilated":
+                return 16034;
             //items
             case "Magnum Pistol":
                 return 5010;
@@ -1167,6 +1274,53 @@ Script ""InitialiseLighting"" ENTER
                 //16071 = "Hulk1"
                 //16072 = "Hulk2"
                 //17000 = "Juggernaut"
+
+
+                //              "Tick Energy",
+                //"Tick Oxygen",
+                //"Tick Kamakazi",
+                //"Compiler Minor",
+                //"Compiler Major",
+                //"Compiler Minor Invisible",
+                //"Compiler Major Invisible",
+                //"Fighter Minor",
+                //"Fighter Major",
+                //"Fighter Minor Projectile",
+                //"Fighter Major Projectile",
+                //"Civilian Crew",
+                //"Civilian Science",
+                //"Civilian Security",
+                //"Civilian Assimilated",
+                //"Hummer Minor",
+                //"Hummer Major",
+                //"Hummer Big Minor",
+                //"Hummer Big Major",
+                //"Hummer Possessed",
+                //"Cyborg Minor",
+                //"Cyborg Major",
+                //"Cyborg Flame Minor",
+                //"Cyborg Flame Major",
+                //"Enforcer Minor",
+                //"Enforcer Major",
+                //"Hunter Minor",
+                //"Hunter Major",
+                //"Trooper Minor",
+                //"Trooper Major",
+                //"Mother of all Cyborgs",
+                //"Mother of all Hunters",
+                //"Sewage Yeti",
+                //"Water Yeti",
+                //"Lava Yeti",
+                //"Defender Minor",
+                //"Defender Major",
+                //"Tiny Figher",
+                //"Tiny Bob",
+                //"Tiny Yeti",
+                //"Civilian Fusion Crew",
+                //"Civilian Fusion Science",
+                //"Civilian Fusion Security",
+                //"Civilian Fusion Assimilated"
+
         }
     }
 
@@ -1403,6 +1557,7 @@ public record UdbLine
     public int? TriggerPlatformIndex { get; set; }
     public string? ControlPanelClassValue { get; set; }
     public int? LineIndex { get; set; }
+    public bool? Portal { get; set; } // true = normal, false = flipped, false = none
 }
 
 public record UdbVector

@@ -264,20 +264,21 @@ public class MapDrawingArea : Gtk.DrawingArea
                 selectedLine = Level.Lines[Selection.Line];
             }
 
-            foreach (var line in Level.Lines)
+            for (short i = 0; i < Level.Lines.Count; i++)
             {
+                var line = Level.Lines[i];
                 if ((Points[line.EndpointIndexes[0]] & Points[line.EndpointIndexes[1]]) == CohenSutherland.Inside && line != selectedLine)
                 {
                     if (Level.FilterLine(Filter, line))
                     {
-                        DrawLine(line);
+                        DrawLine(line, i);
                     }
                 }
             }
 
             if (selectedLine != null)
             {
-                DrawLine(selectedLine);
+                DrawLine(selectedLine, Selection.Line);
             }
 
             for (short i = 0; i < Level.Endpoints.Count; ++i)
@@ -389,7 +390,7 @@ public class MapDrawingArea : Gtk.DrawingArea
 
     private List<int> GetLayersForPoly(int i)
     {
-        return Level.PolygonLayers.ContainsKey((short)i) ? Level.PolygonLayers[(short)i] : [1];
+        return Level.Attributes.PolygonLayers.ContainsKey((short)i) ? Level.Attributes.PolygonLayers[(short)i] : [1];
     }
 
     public void Center(short X, short Y)
@@ -602,7 +603,7 @@ public class MapDrawingArea : Gtk.DrawingArea
     }
 
 
-    void DrawLine(Line line)
+    void DrawLine(Line line, short index)
     {
         var p1 = Level.Endpoints[line.EndpointIndexes[0]];
         var p2 = Level.Endpoints[line.EndpointIndexes[1]];
@@ -629,6 +630,11 @@ public class MapDrawingArea : Gtk.DrawingArea
 
         if (IsPolyVisible(line.ClockwisePolygonOwner))
         {
+            if (Level.Attributes.PortalLines.ContainsKey(index))
+            {
+                var flipped = Level.Attributes.PortalLines[index];
+                color = flipped ? new Drawer.Color(0.0, 1.0, 0.0, 1.0) : new Drawer.Color(0.0, 0.0, 1.0, 1.0);
+            }
             drawer.DrawLine(color, Transform.ToScreenPoint(p1), Transform.ToScreenPoint(p2));
         }
     }

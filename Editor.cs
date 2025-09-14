@@ -1656,6 +1656,16 @@ public class Editor
         }
     }
 
+    public void ClearLayer()
+    {
+        if (Selection.Polygon != -1)
+        {
+            SetUndo();
+            Level.ClearPolygonLayers(Selection.Polygon);
+            Selection.Polygon = -1;
+        }
+    }
+
     public void ToggleLayer()
     {
         if (Level.VisibleLayer == null)
@@ -1669,6 +1679,31 @@ public class Editor
         else
         {
             Level.VisibleLayer = null;
+        }
+    }
+
+    public void TogglePortalLine()
+    {
+        if (Selection.Line == -1)
+        {
+            return;
+        }
+
+        if (!Level.Attributes.PortalLines.ContainsKey(Selection.Line))
+        {
+            Level.Attributes.PortalLines.Add(Selection.Line, false);
+        }
+        else
+        {
+            Level.Attributes.PortalLines.Remove(Selection.Line);
+        }
+    }
+
+    public void FlipPortalLine()
+    {
+        if (Level.Attributes.PortalLines.ContainsKey(Selection.Line))
+        {
+            Level.Attributes.PortalLines[Selection.Line] = !Level.Attributes.PortalLines[Selection.Line];
         }
     }
 
@@ -1787,7 +1822,7 @@ public class Editor
         {
             var redo = Level.Save().Clone();
             Level.Load(undoState.Wad);
-            Level.PolygonLayers = undoState.Attributes.PolygonLayers;
+            Level.Attributes = undoState.Attributes;
             var temp = new Selection();
             temp.CopyFrom(Selection);
             Selection.CopyFrom(undoSelection);

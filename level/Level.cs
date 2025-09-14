@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using weland;
 using weland.level;
 
 namespace Weland;
@@ -273,7 +274,8 @@ public partial class Level
             LoadChunkList<Annotation>(Annotations, wad.Chunks[Annotation.Tag]);
         }
 
-        PolygonLayers.Clear();
+        Attributes.PolygonLayers.Clear();
+        Attributes.PortalLines.Clear();
         EndpointPolygons.Clear();
         EndpointLines.Clear();
         for (var i = 0; i < Endpoints.Count; ++i)
@@ -479,7 +481,7 @@ public partial class Level
             wad.Chunks.Remove(tag);
         }
 
-        return new LevelAndAttributes { Wad = wad, Attributes = new LevelAttributes { PolygonLayers = new Dictionary<short, List<int>>(PolygonLayers) } };
+        return new LevelAndAttributes { Wad = wad, Attributes = Attributes.JsonClone() };
     }
 
     public string Name

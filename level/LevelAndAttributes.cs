@@ -24,4 +24,5 @@ public class LevelAndAttributes
 public record LevelAttributes
 {
     public Dictionary<short, List<int>> PolygonLayers { get; set; } = [];
+    public Dictionary<short, bool> PortalLines { get; set; } = [];
 }
