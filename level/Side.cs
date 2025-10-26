@@ -79,6 +79,11 @@ public class Side : ISerializableBE
         }
     }
 
+    public bool IsRepairSwitch()
+    {
+        return (Flags & SideFlags.IsRepairSwitch) != 0;
+    }
+
     public bool IsPlatformSwitch()
     {
         return controlPanelClasses[ControlPanelType] == ControlPanelClass.PlatformSwitch;

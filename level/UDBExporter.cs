@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using System.Reflection;
+using System.Reflection.Metadata;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -15,6 +16,21 @@ namespace Weland;
 public class UDBExporter
 {
     const double detachedOffset = 4096.0;
+    static readonly List<int> transferModeMapping = [0, 4, 5, 6, 9, 15, 16, 17, 18, 19, 20];
+
+    private static string[] transferModes = [
+        "Normal",
+        "Pulsate",
+        "Wobble",
+        "FastWobble",
+        "Landscape",
+        "HorizontalSlide",
+        "FastHorizontalSlide",
+        "VerticalSlide",
+        "FastVerticalSlide",
+        "Wander",
+        "FastWander",
+    ];
 
     string[] itemNames = {
         "Knife",
@@ -214,12 +230,12 @@ public class UDBExporter
 
         var map = new UdbLevel();
 
-        Dictionary<short, int> lightSwitchMapInfos = [];
-        Dictionary<short, int> platformSwitchMapInfos = [];
+        HashSet<short> repairPlatforms = [];
 
         HashSet<short> initialisedLights = [];
 
         Dictionary<short, HashSet<int>> adjacentPlatforms = [];
+        short? startingPolygonIndex = null;
 
         for (short i = 0; i < level.Lights.Count; i++)
         {
@@ -260,12 +276,11 @@ public class UDBExporter
             {
                 if (side.IsLightSwitch())
                 {
-                    lightSwitchMapInfos[side.PolygonIndex] = side.ControlPanelPermutation + 2000;
                     activatedLights.Add(side.ControlPanelPermutation);
                 }
-                else
+                else if (side.IsPlatformSwitch() && side.IsRepairSwitch())
                 {
-                    platformSwitchMapInfos[side.PolygonIndex] = side.ControlPanelPermutation;
+                    repairPlatforms.Add(side.ControlPanelPermutation);
                 }
             }
         }
@@ -273,6 +288,7 @@ public class UDBExporter
         var controlledLightIndexes = initialisedLights.Concat(activatedLights).ToHashSet();
         var scriptCalls = new HashSet<string>();
         var scripts = new HashSet<string>();
+        var taggedPolygons = new HashSet<short>();
 
         for (short index = 0; index < level.Polygons.Count; index++)
         {
@@ -280,16 +296,42 @@ public class UDBExporter
             switch (p.Type)
             {
                 case PolygonType.LightOnTrigger:
-                    break;
                 case PolygonType.LightOffTrigger:
+                    taggedPolygons.Add(index);
+                    controlledLightIndexes.Add(p.Permutation);
                     break;
                 case PolygonType.PlatformOnTrigger:
-                    break;
                 case PolygonType.PlatformOffTrigger:
-                    break;
                 case PolygonType.Teleporter:
+                    taggedPolygons.Add(index);
+                    taggedPolygons.Add(p.Permutation);
                     break;
+                case PolygonType.VisibleMonsterTrigger:
+                case PolygonType.InvisibleMonsterTrigger:
+                case PolygonType.DualMonsterTrigger:
+                case PolygonType.ItemTrigger:
+                case PolygonType.MustBeExplored:
+                case PolygonType.AutomaticExit:
+                case PolygonType.MinorOuch:
+                case PolygonType.MajorOuch:
+                case PolygonType.Glue:
+                case PolygonType.GlueTrigger:
+                case PolygonType.Superglue:
+                    taggedPolygons.Add(index);
+                    break;
+            }
+        }
 
+        for (short index = 0; index < level.Polygons.Count; index++)
+        {
+            var p = level.Polygons[index];
+            switch (p.Type)
+            {
+                case PolygonType.LightOnTrigger:
+                case PolygonType.LightOffTrigger:
+                case PolygonType.PlatformOnTrigger:
+                case PolygonType.PlatformOffTrigger:
+                case PolygonType.Teleporter:
                 case PolygonType.ItemImpassable:
                 case PolygonType.MonsterImpassable:
                 case PolygonType.ZoneBorder:
@@ -311,6 +353,12 @@ public class UDBExporter
             var floorHeight = p.FloorHeight;
             var ceilingHeight = p.CeilingHeight;
 
+            if (p.MediaIndex > -1 && p.MediaIndex < level.Medias.Count)
+            {
+                var media = level.Medias[p.MediaIndex];
+                floorHeight = media.High;
+            }
+
             if (platform != null)
             {
                 var minFloor = platform.MinimumHeight;
@@ -329,8 +377,12 @@ public class UDBExporter
                     if (platform.InitiallyExtended)
                     {
                         ceilingHeight = minCeiling;
+                        //if (platform.MinimumHeight < p.CeilingHeight)
+                        //{
+                        //    ceilingHeight = Math.Max(p.FloorHeight, platform.MinimumHeight);
+                        //}
                     }
-                    else if (platform.MinimumHeight < p.CeilingHeight)
+                    else if (platform.MaximumHeight < p.CeilingHeight)
                     {
                         ceilingHeight = Math.Max(p.FloorHeight, platform.MinimumHeight);
                     }
@@ -388,6 +440,10 @@ public class UDBExporter
                 int? triggerPlatformIndex = null;
                 string? controlPanelClassValue = null;
 
+                var dontPegTop = false;
+                var dontPegBottom = platform != null && platform.ComesFromCeiling && adjacentPolygon == null;
+                var blockSound = adjacentPolygon != null && ((p.Type != PolygonType.ZoneBorder && adjacentPolygon?.Type == PolygonType.ZoneBorder) || (p.Type == PolygonType.ZoneBorder && adjacentPolygon?.Type != PolygonType.ZoneBorder));
+
                 if (side != null)
                 {
                     if (adjacentPolygon != null)
@@ -424,7 +480,7 @@ public class UDBExporter
 
                             var yOffset = p.CeilingHeight - adjacentPolygon.CeilingHeight + upperPlatformOffset;
                             upper = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)yOffset));
-                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode, fromFloor ? ConvertUnit((short)lowerPlatformOffset) + floorRoundingOffset : floorRoundingOffset, true);
+                            lower = GetUdbTexture(side.Secondary, side.SecondaryLightsourceIndex, side.SecondaryTransferMode, fromFloor ? ConvertUnit((short)lowerPlatformOffset) + floorRoundingOffset : floorRoundingOffset);
                         }
                         else if (side.Type == SideType.High)
                         {
@@ -445,7 +501,7 @@ public class UDBExporter
 
                             var floor = platformOffset + floorRoundingOffset;
 
-                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)floor), true);
+                            lower = GetUdbTexture(side.Primary, side.PrimaryLightsourceIndex, side.PrimaryTransferMode, ConvertUnit((short)floor));
                         }
                         else if (side.Type == SideType.Full)
                         {
@@ -471,6 +527,11 @@ public class UDBExporter
                         {
                             triggerPlatformIndex = side.ControlPanelPermutation;
                             active = level.Platforms.Find(x => x.PolygonIndex == triggerPlatformIndex)?.InitiallyActive ?? false;
+                        }
+
+                        if (side.IsRepairSwitch())
+                        {
+
                         }
 
                         if (middle != null)
@@ -517,6 +578,24 @@ public class UDBExporter
 }}
 ");
                         }
+                        else if (controlPanelClassValue == "Terminal")
+                        {
+                            scriptCalls.Add($@"ScriptCall(""Terminal"", ""Init"", {safeLineIndex}, {levelIndex}, {side.ControlPanelPermutation});");
+                            scripts.Add($@"script ""Terminal{lineIndex}Interact"" (void)
+{{
+	ScriptCall(""Terminal"", ""Interact"", {safeLineIndex});
+}}
+");
+                        }
+                        else if (controlPanelClassValue == "TagSwitch")
+                        {
+                            scriptCalls.Add($@"ScriptCall(""TagSwitch"", ""Init"", {safeLineIndex}, {levelIndex}, {side.ControlPanelPermutation});");
+                            scripts.Add($@"script ""TagSwitch{lineIndex}Interact"" (void)
+{{
+	ScriptCall(""TagSwitch"", ""Interact"", {safeLineIndex});
+}}
+");
+                        }
                     }
                 }
                 else
@@ -543,6 +622,9 @@ public class UDBExporter
                     Middle = middle,
                     Lower = lower,
                     IsSolid = adjacentPolygon != null && line.Solid,
+                    DontPegBottom = dontPegBottom,
+                    DontPegTop = dontPegTop,
+                    BlockSound = blockSound,
                     TriggerLightIndex = triggerLightIndex,
                     TriggerPlatformIndex = triggerPlatformIndex,
                     ControlPanelClassValue = controlPanelClassValue,
@@ -563,11 +645,12 @@ public class UDBExporter
                     Layer = layer,
                     FloorHeight = Math.Round(ConvertUnit(floorHeight)),
                     CeilingHeight = Math.Round(ConvertUnit(ceilingHeight)),
-                    FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight },
-                    CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight },
+                    FloorTexture = new UdbTexture { Name = FormatTextureName(p.FloorTexture), X = ConvertUnit(p.FloorOrigin.X), Y = ConvertUnit(p.FloorOrigin.Y), Sky = GetSky(p.FloorTransferMode), LightIndex = p.FloorLight, TransferMode = GetTransferMode(p.FloorTransferMode) },
+                    CeilingTexture = new UdbTexture { Name = FormatTextureName(p.CeilingTexture), X = ConvertUnit(p.CeilingOrigin.X), Y = ConvertUnit(p.CeilingOrigin.Y), Sky = GetSky(p.CeilingTransferMode), LightIndex = p.CeilingLight, TransferMode = GetTransferMode(p.CeilingTransferMode) },
                     Platform = GetUdbPlatform(platform),
                     Lines = lines.JsonClone(),
-                    LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null
+                    LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null,
+                    AdditionalTagIds = taggedPolygons.Contains(index) ? [index] : []
                 };
 
                 layerSector.Lines.ForEach(l =>
@@ -579,22 +662,92 @@ public class UDBExporter
                 });
 
                 map.Sectors.Add(layerSector);
+
+                var center = GetCenter(layerSector.Lines);
+
+                if (p.Type == PolygonType.MustBeExplored)
+                {
+                    map.Things.Add(new UdbThing
+                    {
+                        X = center.X,
+                        Y = center.Y,
+                        Angle = 0,
+                        Type = 30040
+                    });
+                }
             }
         }
 
         foreach (var obj in level.Objects.Where(e => !e.NetworkOnly))
         {
+            if (obj.Type == ObjectType.Player)
+            {
+                var sectors = map.Sectors.Where(x => x.Index == (int)obj.PolygonIndex);
+                foreach (var sector in sectors)
+                {
+                    sector.AdditionalTagIds.Add(obj.PolygonIndex);
+                }
+                startingPolygonIndex = obj.PolygonIndex;
+            }
+
             var layers = GetLayersForPoly(obj.PolygonIndex);
 
             foreach (var layer in layers)
             {
-                var thing = GetUdbThing(obj, layer);
+                var thing = GetUdbThing(obj, layer, levelIndex);
                 if (thing != null)
                 {
                     map.Things.Add(thing);
                 }
             }
+        }
 
+        var transferDefinitions = new List<TransferDefinition>();
+        foreach (var sector in map.Sectors)
+        {
+            if (IsCustomTransferMode(sector.FloorTexture.TransferMode))
+            {
+                transferDefinitions.Add(new TransferDefinition { Sector = sector, Position = TransferPosition.Floor, TransferMode = sector.FloorTexture.TransferMode! });
+            }
+            if (IsCustomTransferMode(sector.CeilingTexture.TransferMode))
+            {
+                transferDefinitions.Add(new TransferDefinition { Sector = sector, Position = TransferPosition.Ceiling, TransferMode = sector.CeilingTexture.TransferMode! });
+            }
+            foreach (var line in sector.Lines)
+            {
+                if (line.Upper != null && IsCustomTransferMode(line.Upper.TransferMode))
+                {
+                    transferDefinitions.Add(new TransferDefinition { Sector = sector, Line = line, Position = TransferPosition.Upper, TransferMode = line.Upper.TransferMode! });
+                }
+                if (line.Middle != null && IsCustomTransferMode(line.Middle.TransferMode))
+                {
+                    transferDefinitions.Add(new TransferDefinition { Sector = sector, Line = line, Position = TransferPosition.Middle, TransferMode = line.Middle.TransferMode! });
+                }
+                if (line.Lower != null && IsCustomTransferMode(line.Lower.TransferMode))
+                {
+                    transferDefinitions.Add(new TransferDefinition { Sector = sector, Line = line, Position = TransferPosition.Lower, TransferMode = line.Lower.TransferMode! });
+                }
+            }
+        }
+
+        var groupedDefs = transferDefinitions.GroupBy(e => new { e.TransferMode, e.Position }).ToList();
+        var transferScripts = new List<string>();
+        var transferGroupIndex = 3000;
+        foreach (var groupedDef in groupedDefs)
+        {
+            foreach (var definition in groupedDef)
+            {
+                if (definition.Line != null)
+                {
+                    definition.Line.AdditionalTagIds.Add(transferGroupIndex);
+                }
+                else
+                {
+                    definition.Sector.AdditionalTagIds.Add(transferGroupIndex);
+                }
+            }
+            transferScripts.Add($@"ScriptCall(""Transfer"", ""Init"", {transferGroupIndex}, ""{groupedDef.Key.Position}"", ""{groupedDef.Key.TransferMode}"");");
+            transferGroupIndex++;
         }
 
         //lightabsolute_bottom, lightabsolute_mid, lightabsolute_top, lightabsolute, light, light_top, light_mid, light_bottom
@@ -706,6 +859,14 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.fields.arg0str = `Terminal${{sectorLine.lineIndex}}Interact`;
         l.line.tag = 2000 + sectorLine.lineIndex;
       }}
+
+      if(sectorLine.controlPanelClassValue === ""TagSwitch"") {{
+        l.line.action = 80;
+        l.line.flags.repeatspecial = true;
+        l.line.flags.playeruse = true;
+        l.line.fields.arg0str = `TagSwitch${{sectorLine.lineIndex}}Interact`;
+        l.line.tag = 2000 + sectorLine.lineIndex;
+      }}
       allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector: polygon }});
     }}
   }}
@@ -728,12 +889,19 @@ const getBrightness = (lightIndex) => {{
   return light.initiallyActive ? light.primaryActive.intensity : light.primaryInactive.intensity;
 }};
 
-const applySideTextures = () => {{
+const applySideChanges = () => {{
   for (const sl of allSectorLines) {{
     const {{ sideIndex, sectorLine, sector }} = sl;
 
     const line = UDB.Map.getSidedefs()[sideIndex];
     line.line.flags[""blockeverything""] = sectorLine.isSolid;
+    //line.line.flags[""dontpegbottom""] = sectorLine.dontPegBottom;
+    //line.line.flags[""dontpegtop""] = sectorLine.dontPegTop;
+    line.line.flags[""blocksound""] = sectorLine.blockSound;
+
+    for(let tagId of sectorLine.additionalTagIds){{
+      line.line.addTag(tagId);
+    }}
 
     if (sectorLine.upper) {{
       if (sectorLine.upper.sky) {{
@@ -795,6 +963,9 @@ const applySectorChanges = () => {{
     if (polygon.lightSectorTagId) {{
       sector.addTag(polygon.lightSectorTagId);
     }}
+    for(let tagId of polygon.additionalTagIds){{
+      sector.addTag(tagId);
+    }}
 
     if (polygon.platform?.isDoor) {{
       sector.getSidedefs().forEach((sidedef) => {{
@@ -803,14 +974,11 @@ const applySectorChanges = () => {{
           line.flip();
         }} 
 
-        if(!line.back || !line.front) {{
-            line.flags[""dontpegbottom""] = true;
-        }}
-
         if (line.front && sidedef.line.back) {{
           line.action = 80;
           line.flags.repeatspecial = true;
           line.flags.playeruse = true;
+          line.flags.monsteruse = polygon.platform?.isMonsterControl ?? false;
           line.fields.arg0str = polygon.platform.touchScript;
         }}
       }});
@@ -876,7 +1044,7 @@ const create = async () => {{
     }}
   }}
 
-  applySideTextures();
+  applySideChanges();
   applySectorChanges();
   addPortals();
 }};
@@ -945,6 +1113,11 @@ Script ""InitialiseLighting"" ENTER
                 adjacentPlatformRules += $@"    ScriptCall(""Platform"", ""SetAdjacentPlatformRules"", {platformId}, {platform.ActivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.ActivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()}, {platform.ActivatesAdjacantPlatformsAtEachLevel.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenActivating.ToString().ToLower()}, {platform.DeactivatesAdjacentPlatformsWhenDeactivating.ToString().ToLower()}, {platform.DoesNotActivateParent.ToString().ToLower()});
 ";
             }
+            if (repairPlatforms.Contains(platform.PolygonIndex))
+            {
+                adjacentPlatformRules += $@"    ScriptCall(""Platform"", ""SetRepairPlatform"", {platformId});
+";
+            }
         }
         acsWriter.WriteLine(adjacentPlatformRules);
         acsWriter.WriteLine($@"}}
@@ -973,48 +1146,64 @@ Script ""InitialiseLighting"" ENTER
 
         acsWriter.WriteLine($@"Script ""InitialisePolygonTypes"" ENTER
 {{");
-
         for (short i = 0; i < level.Polygons.Count; i++)
         {
             var p = level.Polygons[i];
             switch (p.Type)
             {
                 case PolygonType.LightOnTrigger:
-                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""LightActivate"", {p.Permutation + 500});
-");
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""LightActivate"", {p.Permutation + 500});");
                     break;
                 case PolygonType.LightOffTrigger:
-                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""LightDeactivate"", {p.Permutation + 500});
-");
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""LightDeactivate"", {p.Permutation + 500});");
                     break;
                 case PolygonType.PlatformOnTrigger:
-                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""PlatformActivate"", {p.Permutation});
-");
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""PlatformActivate"", {p.Permutation});");
                     break;
                 case PolygonType.PlatformOffTrigger:
-                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""PlatformDeactivate"", {p.Permutation});
-");
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""PlatformDeactivate"", {p.Permutation});");
                     break;
                 case PolygonType.Teleporter:
-                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""Teleport"", {p.Permutation});
-");
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""Teleport"", {p.Permutation});");
                     break;
-
+                case PolygonType.VisibleMonsterTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""VisibleMonsterTrigger"", {p.Permutation});");
+                    break;
+                case PolygonType.InvisibleMonsterTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""InvisibleMonsterTrigger"", {p.Permutation});");
+                    break;
+                case PolygonType.DualMonsterTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""DualMonsterTrigger"", {p.Permutation});");
+                    break;
+                case PolygonType.ItemTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""ItemTrigger"", {p.Permutation});");
+                    break;
+                case PolygonType.MustBeExplored:
+                    //                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""MustBeExplored"", {p.Permutation});");
+                    //handled with ExploreMarker
+                    break;
+                case PolygonType.AutomaticExit:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""AutomaticExit"", {p.Permutation});");
+                    break;
+                case PolygonType.MinorOuch:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""MinorOuch"", {p.Permutation});");
+                    break;
+                case PolygonType.MajorOuch:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""MajorOuch"", {p.Permutation});");
+                    break;
+                case PolygonType.Glue:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""Glue"", {p.Permutation});");
+                    break;
+                case PolygonType.GlueTrigger:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""GlueTrigger"", {p.Permutation});");
+                    break;
+                case PolygonType.Superglue:
+                    acsWriter.WriteLine($@"    ScriptCall(""Polygon"", ""Init"", {i}, ""Superglue"", {p.Permutation});");
+                    break;
                 case PolygonType.ItemImpassable:
                 case PolygonType.MonsterImpassable:
                 case PolygonType.ZoneBorder:
                 case PolygonType.Goal:
-                case PolygonType.VisibleMonsterTrigger:
-                case PolygonType.InvisibleMonsterTrigger:
-                case PolygonType.DualMonsterTrigger:
-                case PolygonType.ItemTrigger:
-                case PolygonType.MustBeExplored:
-                case PolygonType.AutomaticExit:
-                case PolygonType.MinorOuch:
-                case PolygonType.MajorOuch:
-                case PolygonType.Glue:
-                case PolygonType.GlueTrigger:
-                case PolygonType.Superglue:
                     break;
             }
         }
@@ -1034,10 +1223,38 @@ Script ""InitialiseLighting"" ENTER
         acsWriter.WriteLine($@"}}
 ");
 
+        acsWriter.WriteLine($@"Script ""InitialiseTransferModes"" ENTER
+{{");
+
+        foreach (var scriptCall in transferScripts)
+        {
+            acsWriter.WriteLine($"   {scriptCall}");
+        }
+
+        acsWriter.WriteLine($@"}}
+");
+
+
+        acsWriter.WriteLine($@"Script ""InitialiseLevel"" ENTER
+{{");
+
+        acsWriter.WriteLine($@"    ScriptCall(""LevelManager"", ""SetLevelindex"", {levelIndex});
+    ScriptCall(""LevelManager"", ""SetStart"", {startingPolygonIndex});
+");
+
+        acsWriter.WriteLine($@"}}
+");
+
+
         foreach (var script in scripts)
         {
             acsWriter.WriteLine(script);
         }
+    }
+
+    private bool IsCustomTransferMode(string? transferMode)
+    {
+        return !string.IsNullOrEmpty(transferMode) && transferMode != "Normal" && transferMode != "Landscape";
     }
 
     private double CalculateFloorRoundingOffset(Polygon p, Polygon adjacentPolygon)
@@ -1116,9 +1333,9 @@ Script ""InitialiseLighting"" ENTER
         }
     }
 
-    private UdbThing? GetUdbThing(MapObject obj, int layer)
+    private UdbThing? GetUdbThing(MapObject obj, int layer, int levelIndex)
     {
-        var type = GetThingType(obj);
+        var type = GetThingType(obj, levelIndex);
         if (type == null)
         {
             return null;
@@ -1136,7 +1353,7 @@ Script ""InitialiseLighting"" ENTER
         return t;
     }
 
-    private int? GetThingType(MapObject obj)
+    private int? GetThingType(MapObject obj, int levelIndex)
     {
         if (obj.Type == ObjectType.Player)
         {
@@ -1147,6 +1364,8 @@ Script ""InitialiseLighting"" ENTER
         {
             return 9001;
         }
+
+        var isRevolution = levelIndex >= 24;
 
         var name = GetThingName(obj);
         switch (name)
@@ -1161,17 +1380,17 @@ Script ""InitialiseLighting"" ENTER
             case "Fighter Major Projectile":
                 return 16003;
             case "Compiler Minor":
-                return 16010;
+                return isRevolution ? 16014 : 16010;
             case "Compiler Major":
-                return 16011;
+                return isRevolution ? 16015 : 16011;
             case "Compiler Minor Invisible":
-                return 16012;
+                return isRevolution ? 16016 : 16012;
             case "Compiler Major Invisible":
-                return 16013;
+                return isRevolution ? 16017 : 16013;
             case "Trooper Minor":
-                return 16013;
+                return 16020;
             case "Trooper Major":
-                return 16013;
+                return 16021;
             case "Hunter Minor":
                 return 16051;
             case "Hunter Major":
@@ -1192,6 +1411,10 @@ Script ""InitialiseLighting"" ENTER
                 return 16071;
             case "Water Yeti":
                 return 16071;
+            case "Hummer Minor":
+                return 16061;
+            case "Hummer Major":
+                return 16062;
 
             case "Civilian Crew":
                 return 16030;
@@ -1228,13 +1451,18 @@ Script ""InitialiseLighting"" ENTER
                 return 17;
             case "Alien Weapon":
                 return 2006;
+            case "Uplink Chip":
+                return 30030;
             //"Invisibility Powerup",
             //"Invincibility Powerup",
             //"Infravision Powerup",
 
 
+
+
             //scenery
             case "(S) Big Bones":
+            case "(W) Alien Supply Can":
                 return 30000;
             case "(S) Pfhor Pieces":
                 return 30001;
@@ -1243,11 +1471,14 @@ Script ""InitialiseLighting"" ENTER
             case "(S) Bob Blood":
                 return 30010;
             case "(S) Big Antenna #1":
-                return 30006;
+            case "(W) Security Monitor":
+                return 30002;
             case "(S) Big Antenna #2":
+            case "(W) Rocks":
                 return 30004;
+
             default:
-                return null;
+                return 80000;
 
 
                 //16000 = "Fighter1"
@@ -1338,7 +1569,7 @@ Script ""InitialiseLighting"" ENTER
         return null;
     }
 
-    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, double? yOffset = null, bool bump = false)
+    private UdbTexture? GetUdbTexture(TextureDefinition? texture, short lightSourceIndex, short transferMode, double? yOffset = null)
     {
         if (texture == null)
         {
@@ -1354,7 +1585,8 @@ Script ""InitialiseLighting"" ENTER
 
 
         //y = Math.Floor(y);
-        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = x, Y = y, Sky = GetSky(transferMode), LightIndex = lightSourceIndex };
+        var mode = GetTransferMode(transferMode);
+        return new UdbTexture { Name = FormatTextureName(texture.Value.Texture), X = x, Y = y, Sky = GetSky(transferMode), LightIndex = lightSourceIndex, TransferMode = mode };
     }
 
     public UdbLight GetLight(Light light, short index)
@@ -1403,7 +1635,7 @@ Script ""InitialiseLighting"" ENTER
 
     private bool GetSky(short transferMode)
     {
-        return transferMode == 9;
+        return GetTransferMode(transferMode) == "Landscape";
     }
 
     private UdbPlatform? GetUdbPlatform(Platform? platform)
@@ -1427,6 +1659,11 @@ Script ""InitialiseLighting"" ENTER
             IsMonsterControl = platform.IsMonsterControllable,
             TouchScript = platform.IsDoor ? $"Door{platform.PolygonIndex}Touch" : null
         };
+    }
+
+    private string GetTransferMode(short transferMode)
+    {
+        return transferModes[transferModeMapping.IndexOf(transferMode)];
     }
 
     private string FormatTextureName(ShapeDescriptor shapeDescriptor)
@@ -1526,6 +1763,7 @@ public record UdbSector
     public required UdbTexture CeilingTexture { get; set; }
     public UdbPlatform? Platform { get; set; }
     public int? LightSectorTagId { get; set; }
+    public HashSet<int> AdditionalTagIds { get; set; } = [];
     public List<UdbLine> Lines { get; set; } = [];
 }
 
@@ -1553,11 +1791,15 @@ public record UdbLine
     public UdbTexture? Middle { get; set; }
     public UdbTexture? Lower { get; set; }
     public bool IsSolid { get; set; }
+    public bool DontPegTop { get; set; }
+    public bool DontPegBottom { get; set; }
+    public bool BlockSound { get; set; }
     public int? TriggerLightIndex { get; set; }
     public int? TriggerPlatformIndex { get; set; }
     public string? ControlPanelClassValue { get; set; }
     public int? LineIndex { get; set; }
     public bool? Portal { get; set; } // true = normal, false = flipped, false = none
+    public HashSet<int> AdditionalTagIds { get; set; } = [];
 }
 
 public record UdbVector
@@ -1573,6 +1815,7 @@ public record UdbTexture
     public double Y { get; set; }
     public bool Sky { get; set; }
     public int LightIndex { get; set; }
+    public string? TransferMode { get; set; }
 }
 
 public record UdbThing
@@ -1583,4 +1826,21 @@ public record UdbThing
     public double Z { get; set; }
     public double Angle { get; set; }
     public int? TagId { get; set; }
+}
+
+public enum TransferPosition
+{
+    Ceiling,
+    Floor,
+    Upper,
+    Middle,
+    Lower
+};
+
+public record TransferDefinition
+{
+    public UdbSector Sector { get; set; }
+    public UdbLine? Line { get; set; }
+    public required string TransferMode { get; set; }
+    public TransferPosition Position { get; set; }
 }

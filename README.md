@@ -1,5 +1,12 @@
 # Overview
 
+This is a fork of the original Weland designed to support level transitions to Marathon VR. It includes
+- Upgrade to .NET 9
+- A UDB Exporter that generates levels and initialisation code to gzdoom
+- Extra commands to help facilitate level splitting and gzdoom portals for 5D space
+
+---
+
 Weland is a Marathon map editor by Gregory Smith, written in C#, and
 using GTK#
 
