@@ -353,11 +353,11 @@ public class UDBExporter
             var floorHeight = p.FloorHeight;
             var ceilingHeight = p.CeilingHeight;
 
-            if (p.MediaIndex > -1 && p.MediaIndex < level.Medias.Count)
-            {
-                var media = level.Medias[p.MediaIndex];
-                floorHeight = media.High;
-            }
+            //if (p.MediaIndex > -1 && p.MediaIndex < level.Medias.Count)
+            //{
+            //    var media = level.Medias[p.MediaIndex];
+            //    floorHeight = media.High;
+            //}
 
             if (platform != null)
             {
@@ -635,6 +635,12 @@ public class UDBExporter
                 lines.Add(udbLine);
             }
 
+            HashSet<int> additionalTagIds = taggedPolygons.Contains(index) ? [index] : [];
+            if (p.MediaIndex > -1 && p.MediaIndex < level.Medias.Count)
+            {
+                additionalTagIds.Add(4000 + p.MediaIndex);
+            }
+
             var layers = GetLayersForPoly(index);
 
             foreach (var layer in layers)
@@ -650,7 +656,7 @@ public class UDBExporter
                     Platform = GetUdbPlatform(platform),
                     Lines = lines.JsonClone(),
                     LightSectorTagId = controlledLightIndexes.Contains(p.FloorLight) ? 500 + p.FloorLight : null,
-                    AdditionalTagIds = taggedPolygons.Contains(index) ? [index] : []
+                    AdditionalTagIds = additionalTagIds
                 };
 
                 layerSector.Lines.ForEach(l =>
@@ -750,6 +756,67 @@ public class UDBExporter
             transferGroupIndex++;
         }
 
+        var minx = map.Sectors.SelectMany(x => x.Lines.Select(l => l.Start.X)).Min();
+
+        for (var i = 0; i < level.Medias.Count; i++)
+        {
+            map.Sectors.Add(new UdbSector
+            {
+                Index = 4000 + i,
+                Lines = [
+                    new UdbLine
+                    {
+                        Start = new UdbVector(minx - 32, i * 32),
+                        End = new UdbVector(minx - 16, i * 32),
+                        Middle = new UdbTexture
+                        {
+                            Name = string.Empty
+                        }
+                    },
+                    new UdbLine
+                    {
+                        Start = new UdbVector(minx - 16, i * 32),
+                        End = new UdbVector(minx - 16,  (i * 32) + 16),
+                        Middle = new UdbTexture
+                        {
+                            Name = string.Empty
+                        }
+                    },
+                    new UdbLine
+                    {
+                        Start = new UdbVector(minx - 16,  (i * 32) + 16),
+                        End = new UdbVector(minx - 32,  (i * 32) + 16),
+                        Middle = new UdbTexture
+                        {
+                            Name = string.Empty
+                        }
+                    },
+                    new UdbLine
+                    {
+                        Start = new UdbVector(minx - 32,  (i * 32) + 16),
+                        End = new UdbVector(minx - 32,  i * 32),
+                        Middle = new UdbTexture
+                        {
+                            Name = string.Empty
+                        }
+                    }
+                ],
+                CeilingHeight = Math.Round(ConvertUnit(level.Medias[i].High)),
+                FloorHeight = Math.Round(ConvertUnit(level.Medias[i].High)) - 1,
+                CeilingTexture = new UdbTexture
+                {
+                    Name = "2SET12",
+                },
+                FloorTexture = new UdbTexture
+                {
+                    Name = string.Empty
+                },
+                MediaTagId = 4000 + i,
+                MediaType = level.Medias[i].Type.ToString()
+
+            });
+        }
+
         //lightabsolute_bottom, lightabsolute_mid, lightabsolute_top, lightabsolute, light, light_top, light_mid, light_bottom
         using var writer = new StreamWriter(path);
         {
@@ -800,6 +867,11 @@ const drawSector = async (polygon, debug = false) => {{
       sector.fields.lightceiling = 0;
     }}
 
+    if(polygon.mediaTagId !== null) {{
+      sector.fields.user_managed_3d_floor = true;
+    }}
+
+    let lineIndex = 0;
     for (let l of sector.getSidedefs()) {{
       const sectorLine = polygon.lines.find((x) => {{
         // UDB.showMessage(`[${{x.start.x}}, ${{x.start.y}}] - [${{x.end.x}}, ${{x.end.y}}], [${{l.line.line.v1.x}}, ${{l.line.line.v1.y}}] - [${{l.line.line.v2.x}}, ${{l.line.line.v2.y}}]`);
@@ -807,6 +879,14 @@ const drawSector = async (polygon, debug = false) => {{
       }});
       if (!sectorLine) {{
         continue;
+      }}
+
+      if(lineIndex === 0 && polygon.mediaTagId !== null) {{
+        l.line.action = 160;
+        l.line.args[0] = polygon.mediaTagId.toString();
+        l.line.args[1] = '1';
+        l.line.args[2] = '0';
+        l.line.args[3] = '255';
       }}
 
       if (sectorLine.triggerLightIndex) {{
@@ -868,6 +948,7 @@ const drawSector = async (polygon, debug = false) => {{
         l.line.tag = 2000 + sectorLine.lineIndex;
       }}
       allSectorLines.push({{ sideIndex: l.index, sectorLine: sectorLine, sector: polygon }});
+      lineIndex++;
     }}
   }}
   count++;
@@ -1415,6 +1496,10 @@ Script ""InitialiseLighting"" ENTER
                 return 16061;
             case "Hummer Major":
                 return 16062;
+            case "Tick Energy":
+                return 16090;
+            case "Tick Oxygen":
+                return 16091;
 
             case "Civilian Crew":
                 return 16030;
@@ -1765,6 +1850,8 @@ public record UdbSector
     public int? LightSectorTagId { get; set; }
     public HashSet<int> AdditionalTagIds { get; set; } = [];
     public List<UdbLine> Lines { get; set; } = [];
+    public int? MediaTagId { get; set; }
+    public string? MediaType { get; set; }
 }
 
 public record UdbPlatform
@@ -1806,6 +1893,14 @@ public record UdbVector
 {
     public double X { get; set; }
     public double Y { get; set; }
+
+    public UdbVector() { }
+
+    public UdbVector(double x, double y)
+    {
+        X = x;
+        Y = y;
+    }
 }
 
 public record UdbTexture
