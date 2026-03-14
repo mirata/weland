@@ -322,6 +322,8 @@ public class UDBExporter
             }
         }
 
+        var mediaMinFloorHeights = new Dictionary<short, short>();
+
         for (short index = 0; index < level.Polygons.Count; index++)
         {
             var p = level.Polygons[index];
@@ -352,12 +354,6 @@ public class UDBExporter
             var platform = level.Platforms.FirstOrDefault(e => e.PolygonIndex == index);
             var floorHeight = p.FloorHeight;
             var ceilingHeight = p.CeilingHeight;
-
-            //if (p.MediaIndex > -1 && p.MediaIndex < level.Medias.Count)
-            //{
-            //    var media = level.Medias[p.MediaIndex];
-            //    floorHeight = media.High;
-            //}
 
             if (platform != null)
             {
@@ -402,6 +398,16 @@ public class UDBExporter
                 if (platform.ActivatesLight)
                 {
                     activatedLights.Add(p.FloorLight);
+                }
+            }
+
+
+
+            if (p.MediaIndex > -1 && p.MediaIndex < level.Medias.Count)
+            {
+                if (!mediaMinFloorHeights.TryGetValue(p.MediaIndex, out var min) || p.FloorHeight < min)
+                {
+                    mediaMinFloorHeights[p.MediaIndex] = p.FloorHeight;
                 }
             }
 
@@ -760,9 +766,15 @@ public class UDBExporter
 
         for (var i = 0; i < level.Medias.Count; i++)
         {
+            var floorHeight = Math.Round(ConvertUnit(level.Medias[i].High)) - 1;
+            if (mediaMinFloorHeights.TryGetValue((short)i, out var min))
+            {
+                floorHeight = Math.Round(ConvertUnit(min));
+            }
             map.Sectors.Add(new UdbSector
             {
                 Index = 4000 + i,
+                AdditionalTagIds = [5000 + i],
                 Lines = [
                     new UdbLine
                     {
@@ -802,10 +814,10 @@ public class UDBExporter
                     }
                 ],
                 CeilingHeight = Math.Round(ConvertUnit(level.Medias[i].High)),
-                FloorHeight = Math.Round(ConvertUnit(level.Medias[i].High)) - 1,
+                FloorHeight = floorHeight,
                 CeilingTexture = new UdbTexture
                 {
-                    Name = "2SET12",
+                    Name = level.Medias[i].Type == MediaType.Lava ? "2SET12" : "4SET05",
                 },
                 FloorTexture = new UdbTexture
                 {
@@ -813,8 +825,10 @@ public class UDBExporter
                 },
                 MediaTagId = 4000 + i,
                 MediaType = level.Medias[i].Type.ToString()
-
             });
+
+
+            transferScripts.Add($@"ScriptCall(""Transfer"", ""InitMedia"", {5000 + i}, {level.Medias[i].Direction:F2}, {level.Medias[i].CurrentMagnitude:F2});");
         }
 
         //lightabsolute_bottom, lightabsolute_mid, lightabsolute_top, lightabsolute, light, light_top, light_mid, light_bottom
@@ -869,6 +883,9 @@ const drawSector = async (polygon, debug = false) => {{
 
     if(polygon.mediaTagId !== null) {{
       sector.fields.user_managed_3d_floor = true;
+      sector.fields.damagetype = polygon.mediaType == ""Lava"" ? ""Fire"" : ""Slime"";
+      sector.fields.damageamount = 20;
+      sector.fields.damageinterval = 25;
     }}
 
     let lineIndex = 0;
@@ -1500,6 +1517,8 @@ Script ""InitialiseLighting"" ENTER
                 return 16090;
             case "Tick Oxygen":
                 return 16091;
+            case "Cyborg Minor":
+                return 16100;
 
             case "Civilian Crew":
                 return 16030;
@@ -1507,7 +1526,7 @@ Script ""InitialiseLighting"" ENTER
                 return 16031;
             case "Civilian Security":
                 return 16032;
-            case "Civilian Engineering": //TODO: doesnt exist?
+            case "Tiny Bob":
                 return 16033;
             case "Civilian Assimilated":
                 return 16034;
@@ -1548,7 +1567,8 @@ Script ""InitialiseLighting"" ENTER
             //scenery
             case "(S) Big Bones":
             case "(W) Alien Supply Can":
-                return 30000;
+            case "(L) Large Cylinder":
+                return 30000; //upright waste
             case "(S) Pfhor Pieces":
                 return 30001;
             case "(S) Bob Pieces":
@@ -1557,11 +1577,14 @@ Script ""InitialiseLighting"" ENTER
                 return 30010;
             case "(S) Big Antenna #1":
             case "(W) Security Monitor":
-                return 30002;
+            case "(L) Small Cylinder":
+                return 30002; //upright cylinder
             case "(S) Big Antenna #2":
             case "(W) Rocks":
-                return 30004;
-
+            case "(L) Bones":
+                return 30004; //paper
+            case "(W) Puddles":
+                return 30007;
             default:
                 return 80000;
 
